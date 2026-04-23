@@ -1,0 +1,26 @@
+## Local development: run both setups
+##
+## Usage:  docker compose up --build
+##
+## Socket.io:    ws://localhost:3000
+## AnyCable:     ws://localhost:8080/cable
+## Broadcast:    http://localhost:3000/_broadcast (Socket.io)
+##               http://localhost:8090/_broadcast (AnyCable)
+
+services:
+  socketio:
+    build: ./backend
+    ports:
+      - "3000:3000"
+
+  anycable-go:
+    image: anycable/anycable-go:latest
+    environment:
+      ANYCABLE_HOST: "0.0.0.0"
+      ANYCABLE_PORT: "8080"
+      ANYCABLE_BROKER: memory
+      ANYCABLE_PRESETS: broker
+      ANYCABLE_PUBLIC: "true"
+    ports:
+      - "8080:8080"
+      - "8090:8090"
