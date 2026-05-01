@@ -1,33 +1,46 @@
 # AnyCable vs Socket.io Benchmarks
 
-Reproducible benchmarks behind [AnyCable vs Socket.io](https://anycable.io/compare/socket-io). Two questions:
+Reproducible benchmarks behind [AnyCable vs Socket.io](https://anycable.io/compare/socket-io). Three questions:
 
-1. **Delivery under jitter** — how many messages does each server actually deliver when clients experience real-world WiFi drops and cellular handoffs?
+1. **Delivery under jitter** — how many messages does each server actually deliver when clients experience real-world WiFi drops and cellular handoffs? And when delivery succeeds via replay, **how long does it take**?
 2. **Deploy resilience** — what happens to live WebSocket connections when you ship new code?
+3. **Connection capacity** — how many idle WebSocket connections can a single instance hold?
 
-## Results
+Three configurations are tested for question (1):
 
-All numbers are from identical Railway infrastructure (same region, same plan).
+- **Default Socket.io** — `socket.io` 4.x, no Connection State Recovery, no Redis (single instance, in-memory).
+- **Socket.io + CSR** — same Socket.io version with `connectionStateRecovery` opt-in flag, in-memory adapter (the simplest CSR setup).
+- **AnyCable** — `anycable-go` 1.6+ with its protocol (`actioncable-v1-ext-json`) and the in-memory broker.
 
-### Delivery under jitter — 1,000 clients, 120 messages at 2/sec
+## Headline results
 
-**Disruption profile.** Every client's TCP socket is force-closed for **1 second every ~15 seconds** (no clean close — the kind of failure WiFi drops produce). Publishing runs for 60 seconds, so each client sees ~5 disconnect events totalling **~5 seconds offline per client** — roughly 8% of the test. Add the reconnect handshake (~0.3 s) and the blind window widens to ~11%.
+All numbers are from identical Railway infrastructure (same region, same Pro tier — 32 vCPU, 32 GB).
 
-Three configurations, same workload:
+### Delivery under jitter — 10,000 clients, 120 messages at 2/sec
 
-|                          | Socket.io (default) | Socket.io + CSR       | AnyCable  |
-| ------------------------ | ------------------- | --------------------- | --------- |
-| Adapter / broker         | in-memory           | in-memory (CSR on)    | memory broker |
-| Expected deliveries      | 120,000             | 120,000               | 120,000   |
-| Jitter events            | 4,987               | *TBD*                 | 4,134     |
-| **Deliveries lost**      | **12,779**          | ***TBD***             | **0**     |
-| **Delivery rate**        | **89.1%**           | ***TBD***             | **100%**  |
+**Disruption profile.** Every client's TCP socket is force-closed for **1 second every ~15 seconds** — no clean close, the kind of failure WiFi drops produce. Over the test, each client experiences ~10 jitter events. With ~1.3 s of blind window per event, the cumulative offline window is ~13% of the publishing run.
 
-Socket.io's default 10.9% loss matches the blind-window ratio almost exactly — nothing is delivered during the outage, nothing is recovered after.
+|                                  | Default Socket.io | Socket.io + CSR | AnyCable    |
+| -------------------------------- | ----------------- | ---------------- | ----------- |
+| Clients                          | 10,000            | 10,000           | 10,000      |
+| Expected deliveries              | 1,200,000         | 1,200,000        | 1,200,000   |
+| Jitter events                    | 98,889            | 103,430          | 83,862      |
+| **Deliveries lost**              | **150,642**       | **0**            | **0**       |
+| **Delivery rate**                | **87.41%**        | **100%**         | **100%**    |
+| CSR session resume rate          | n/a               | 99.5%            | n/a         |
+| Connect failures                 | 0                 | 0                | 0           |
+| **Replay latency p50** (over min) | 167 ms            | 279 ms           | 246 ms      |
+| **Replay latency p95**           | 1.19 s            | 4.92 s           | **0.68 s**  |
+| **Replay latency p99**           | 1.66 s            | **8.99 s**       | **1.04 s**  |
+| **Replay latency max**           | 2.29 s            | **12.03 s**      | 3.53 s      |
+| Server peak memory               | 676 MB (Node)     | 616 MB (Node)    | 1.65 GB (Go) |
+| Server peak CPU (of 32 vCPU)     | 0.74% (~0.24 vCPU) | 0.42% (~0.13 vCPU) | 0.98% (~0.31 vCPU) |
 
-The CSR column will be filled in once the `jitter-socketio-csr.ts` benchmark is run (see [Benchmark 1 § Socket.io with CSR](#running-with-csr-enabled)). Expected behaviour per the [Socket.io docs](https://socket.io/docs/v4/connection-state-recovery): CSR resumes buffered packets **if** the session is recovered within `maxDisconnectionDuration` (default 2 min), **the adapter is CSR-compatible** (in-memory, Redis Streams, or MongoDB — Redis pub/sub is **not**), and the recovery succeeds (the docs state: *"the recovery will not always be successful"*).
+**What the numbers mean.**
 
-AnyCable's extended protocol replays the same blind window on reconnect, so the delivery rate is unaffected — and the same guarantee holds across server restarts when the broker is NATS JetStream or Redis.
+- **Default Socket.io loses ~13% of messages.** The blind-window ratio matches almost exactly — nothing is delivered during the outage and nothing is recovered after. Per the [Socket.io delivery-guarantees doc](https://socket.io/docs/v4/delivery-guarantees), this is expected: *"if the connection is broken while an event is being sent, then there is no guarantee that the other side has received it."*
+- **Socket.io + CSR closes the delivery gap** but with a multi-second replay tail. p99 = 9 seconds, max = 12 seconds. CSR has [documented caveats](https://socket.io/docs/v4/connection-state-recovery): opt-in, "experimental", incompatible with the Redis pub/sub adapter, and state is lost on restart unless you use Redis Streams or MongoDB.
+- **AnyCable closes the delivery gap with a sub-second replay tail.** p99 = 1 second, max = 3.5 seconds — about 7× faster than CSR at the tail.
 
 ### Reconnection avalanche — 5,000 clients, single deploy
 
@@ -39,210 +52,227 @@ AnyCable's extended protocol replays the same blind window on reconnect, so the 
 | Clients that never reconnected    | 189 (3.8%)   | 0        |
 | **Total downtime**                | **~6.8 s**   | **0 s**  |
 
+CSR with the in-memory adapter doesn't help here — server state is lost on restart. CSR with Redis Streams keeps state, but the connections themselves are still all severed; the avalanche is architectural.
+
+### Connection capacity — idle WebSockets to anycable-go
+
+| Idle connections | AnyCable memory | AnyCable CPU (of 32 vCPU) |
+| ---------------- | --------------- | ------------------------ |
+| 1,000            | 280 MB          | 0%                       |
+| 10,000           | 280 MB          | 0%                       |
+| 20,000           | 751 MB          | 1.08% (~0.3 vCPU)        |
+| **50,000**       | **1.98 GB**     | **1.08% (~0.3 vCPU)**    |
+
+About 40 KB per connection in steady state. We hit a test-client ceiling at ~56K (the Node bench runner couldn't open more outbound TCP connections from one container) — anycable-go itself didn't break a sweat. Server CPU stayed near zero throughout.
+
 ## Why the results are what they are
 
-**Delivery.** Socket.io provides at-most-once delivery. Messages sent during a disconnect are gone — the server doesn't buffer, the client doesn't ask for them back. AnyCable's extended Action Cable protocol (`actioncable-v1-ext-json`) assigns an incrementing offset to every broadcast. The client tracks its position; on reconnect it sends "I last saw offset N" and the server replays everything since.
+**Delivery — three protocols, three behaviours.**
+
+- *Default Socket.io* is at-most-once. Messages sent during a disconnect are gone — the server doesn't buffer, the client doesn't ask for them back.
+- *Socket.io + CSR* (4.6+) appends an opaque per-packet offset to every event. On unexpected disconnect, the server stashes socket state for `maxDisconnectionDuration`. On reconnect, the client sends pid + last-offset; the server replays buffered packets.
+- *AnyCable* uses its protocol (`actioncable-v1-ext-json`). Each broadcast carries `(stream, epoch, offset)`. The client tracks its position; on reconnect it issues a `history` command and the server replays the missed range as a batch.
+
+The latency gap between CSR and AnyCable comes from how each replays. CSR drains a per-socket buffer over a single re-established WebSocket; AnyCable's history is per-stream and parallel.
 
 **Deploys.** A Socket.io server *is* your application — WebSocket connections live inside the same Node.js process that handles HTTP. Restart the process (i.e. deploy) and every connection dies. AnyCable is a separate Go binary; your app broadcasts to it over HTTP. Your app restarts; AnyCable stays up; connections don't notice.
+
+**Connection capacity.** Go goroutines multiplex thousands of WebSockets per OS thread with minimal per-connection overhead. Node's single-event-loop model is fundamentally different.
 
 ## Repository layout
 
 ```
 benchmark/
 ├── docker-compose.yml        # Local Socket.io + anycable-go
-├── railway.toml              # Railway deploy config for Socket.io
+├── railway.toml              # Railway deploy config (socketio-server)
 └── backend/
-    ├── Dockerfile            # Socket.io image used by Railway
+    ├── Dockerfile            # Same image for socketio-server and bench-runner;
+    │                         # SERVICE_ENTRY env selects which entry point.
     ├── package.json
     └── src/
-        ├── publisher.ts      # HTTP publisher (sequential, numbered)
+        ├── publisher.ts             # HTTP publisher (sequential, numbered)
         ├── socketio/
-        │   └── server.ts     # Socket.io server (with /_broadcast)
+        │   └── server.ts            # Socket.io server (with /_broadcast, /publish-local)
+        ├── bench-runner/
+        │   └── server.ts            # Railway-hosted bench-runner (10K+ scale)
         └── bench/
-            ├── jitter-socketio.ts          # Delivery under jitter — Socket.io (default)
-            ├── jitter-socketio-csr.ts      # Delivery under jitter — Socket.io + CSR
-            ├── jitter-anycable.ts          # Delivery under jitter — AnyCable
+            ├── jitter-socketio.ts          # Local: delivery under jitter — Socket.io (default)
+            ├── jitter-socketio-csr.ts      # Local: delivery under jitter — Socket.io + CSR
+            ├── jitter-anycable.ts          # Local: delivery under jitter — AnyCable
             ├── avalanche-socketio.ts       # Local deploy simulation — Socket.io
             ├── avalanche-railway-socketio.ts  # Railway deploy — Socket.io
-            └── avalanche-anycable.ts       # Deploy simulation — AnyCable
+            ├── avalanche-anycable.ts       # Deploy simulation — AnyCable
+            └── railway-metrics.ts          # Pull memory/CPU from Railway GraphQL API
 ```
 
-## Prerequisites
+## Two run modes
+
+**Local (small scale, dev laptop).** The `src/bench/jitter-*.ts` and `src/bench/avalanche-*.ts` scripts each run thousands of WebSocket clients from one Node process. Comfortable up to ~1,000 clients on a developer machine; beyond that you'll hit local NAT or event-loop limits.
+
+**Railway-hosted bench-runner (10K+).** `src/bench-runner/server.ts` is an Express app that runs as a separate Railway service in the same project as `socketio-server` and `anycable-go`. It uses Railway's internal network (`*.railway.internal`) to reach the targets — no NAT, no public-internet round-trip, no client-side bottlenecks. This is how the 10K headline numbers above were produced.
+
+## Local quick-start
+
+### Prerequisites
 
 - Node.js 22+
-- Either Docker (for the docker-compose quick start) or a local [anycable-go](https://docs.anycable.io/anycable-go/getting_started) binary (`brew install anycable-go`).
+- Either Docker (for the docker-compose quick-start) or a local [anycable-go](https://docs.anycable.io/anycable-go/getting_started) binary (`brew install anycable-go`).
 
 ```bash
 cd backend
 npm install
 ```
 
-## Benchmark 1: delivery under jitter
+### Run the three jitter variants at small scale
 
-### What it measures
-
-Each client subscribes to a stream and receives a fixed number of numbered messages published at a steady rate. Every ~15 seconds the client's TCP socket is force-closed for ~1 second — no clean close, the kind of failure a WiFi drop produces. The client reconnects on its own. At the end, the script counts which sequence numbers each client actually received and reports the delivery rate.
-
-### Small-scale sanity check (20 clients, local)
-
-Start the servers:
+Start the servers (CSR controlled via env on the Socket.io server):
 
 ```bash
 # Terminal 1 — Socket.io (default, no CSR)
-cd backend && npm run dev:socketio              # :3000
+npm run dev:socketio                  # :3000
 
 # OR: Socket.io with Connection State Recovery enabled
-cd backend && npm run dev:socketio-csr          # :3000, SOCKETIO_CSR=1
+npm run dev:socketio-csr              # :3000, SOCKETIO_CSR=1
 
 # Terminal 2 — anycable-go
 anycable-go --port 8080 --broker=memory --presets=broker --public
 ```
 
-#### Socket.io (default)
+Run any of the three benches (each is a separate process; pick one):
 
 ```bash
-# Terminal 3 — publisher
-BROADCAST_URL=http://localhost:3000/_broadcast \
-  TOTAL_MESSAGES=60 INTERVAL_MS=500 \
-  npm run publish
-
-# Terminal 4 — clients
-SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=20 DURATION=40 \
+# Default Socket.io
+BROADCAST_URL=http://localhost:3000/_broadcast TOTAL_MESSAGES=60 INTERVAL_MS=500 \
+  npm run publish &
+SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=40 \
   npm run bench:jitter:socketio
-```
 
-<a id="running-with-csr-enabled"></a>
-#### Socket.io with CSR enabled
-
-Start the server with `npm run dev:socketio-csr` (or `SOCKETIO_CSR=1 npm run dev:socketio`), then:
-
-```bash
-# Terminal 3 — publisher
-BROADCAST_URL=http://localhost:3000/_broadcast \
-  TOTAL_MESSAGES=60 INTERVAL_MS=500 \
-  npm run publish
-
-# Terminal 4 — clients (uses reconnection: true so socket.io-client
-# passes pid + offset automatically on reconnect)
-SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=20 DURATION=40 \
+# Socket.io + CSR (server must be started with SOCKETIO_CSR=1)
+BROADCAST_URL=http://localhost:3000/_broadcast TOTAL_MESSAGES=60 INTERVAL_MS=500 \
+  npm run publish &
+SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=40 \
   npm run bench:jitter:socketio-csr
-```
 
-The script reports both delivery rate and how often `socket.recovered === true` — i.e. how often CSR actually resumed the session rather than falling back to a fresh connect.
-
-#### AnyCable
-
-```bash
-# Terminal 3 — publisher
-BROADCAST_URL=http://localhost:8090/_broadcast \
-  TOTAL_MESSAGES=60 INTERVAL_MS=500 \
-  npm run publish
-
-# Terminal 4 — clients
-ANYCABLE_URL=ws://localhost:8080/cable NUM_CLIENTS=20 DURATION=40 \
+# AnyCable
+BROADCAST_URL=http://localhost:8090/_broadcast TOTAL_MESSAGES=60 INTERVAL_MS=500 \
+  npm run publish &
+ANYCABLE_URL=ws://localhost:8080/cable NUM_CLIENTS=50 DURATION=40 \
   npm run bench:jitter:anycable
 ```
 
-Even at 20 clients the gap between default Socket.io and AnyCable is obvious. The CSR run is the interesting middle case — it measures how much of the jitter loss a correctly configured Socket.io deployment recovers.
+Each script prints delivery rate, jitter event count, latency percentiles (raw + min-normalized), and client-side peak RSS.
 
-### Published numbers — 1,000 clients
-
-These are the parameters used for the results table above.
+### Local avalanche test (Socket.io spawns, kills, restarts)
 
 ```bash
-ulimit -n 65536   # raise open-file limit
-
-# --- Socket.io (default, no CSR) ---------------------------
-BROADCAST_URL=http://localhost:3000/_broadcast \
-  TOTAL_MESSAGES=120 INTERVAL_MS=500 \
-  npm run publish &
-NUM_CLIENTS=1000 DURATION=90 \
-  JITTER_INTERVAL=15 JITTER_DURATION=1000 \
-  npm run bench:jitter:socketio
-
-# --- Socket.io + CSR (requires SOCKETIO_CSR=1 on the server) ---
-BROADCAST_URL=http://localhost:3000/_broadcast \
-  TOTAL_MESSAGES=120 INTERVAL_MS=500 \
-  npm run publish &
-NUM_CLIENTS=1000 DURATION=90 \
-  JITTER_INTERVAL=15 JITTER_DURATION=1000 \
-  npm run bench:jitter:socketio-csr
-
-# --- AnyCable ---------------------------------------------
-BROADCAST_URL=http://localhost:8090/_broadcast \
-  TOTAL_MESSAGES=120 INTERVAL_MS=500 \
-  npm run publish &
-ANYCABLE_URL=ws://localhost:8080/cable NUM_CLIENTS=1000 DURATION=90 \
-  JITTER_INTERVAL=15 JITTER_DURATION=1000 \
-  npm run bench:jitter:anycable
+npm run build                          # the script runs node dist/socketio/server.js
+NUM_CLIENTS=1000 PORT=4000 npm run bench:avalanche:socketio
 ```
 
-For 5,000+ clients, run the publisher from a different machine (or a Railway instance) to avoid local TCP port exhaustion.
+Output includes disconnect spread, recovery p50 / p95 / p99, and total downtime.
 
-## Benchmark 2: reconnection avalanche
-
-### What it measures
-
-Connect N clients, then restart the WebSocket server — the same event that happens on every deploy. Track:
-
-- how fast clients detect the disconnect,
-- how long until 95% reconnect,
-- how many never reconnect at all.
-
-For Socket.io this is a real test — the script spawns the server as a child process, kills it, and starts it back up. For AnyCable the test is essentially "confirm nothing happens": anycable-go is a separate process that isn't restarted when your application deploys, so there's no event for clients to react to. The script connects clients, waits, and verifies the disconnect count stays at zero.
-
-### Local: Socket.io (spawns, kills, restarts)
+For the AnyCable counterpart (which is essentially "confirm nothing happens"):
 
 ```bash
-cd backend && npm run build        # the script runs node dist/socketio/server.js
-
-NUM_CLIENTS=1000 PORT=4000 \
-  npm run bench:avalanche:socketio
-```
-
-Output includes disconnect spread, recovery p50 / p95, and total downtime.
-
-### Local: AnyCable (no-op from the app's perspective)
-
-```bash
-# Terminal 1
-anycable-go --port 8080 --broker=memory --presets=broker --public
-
-# Terminal 2
-NUM_CLIENTS=1000 \
-  ANYCABLE_URL=ws://localhost:8080/cable \
+anycable-go --port 8080 --broker=memory --presets=broker --public &
+NUM_CLIENTS=1000 ANYCABLE_URL=ws://localhost:8080/cable \
   BROADCAST_URL=http://localhost:8090/_broadcast \
   npm run bench:avalanche:anycable
 ```
 
-The script publishes a few messages, sleeps 10 seconds to represent the app restart window, then publishes again. Disconnect count stays at 0.
+## Railway: 10K-client jitter (production-scale)
 
-### At scale: Railway-hosted Socket.io
+The 10K results above are produced by deploying the same source as **two Railway services** in one project:
 
-This is how the 5,000-client numbers in the results table were produced.
+- `socketio-server` — the Socket.io server (also serves `/publish-local` to drive in-process publishing for jitter tests).
+- `bench-runner` — the bench runner; uses `*.railway.internal` to reach `socketio-server` and `anycable-go`.
+
+Plus a third existing service:
+
+- `anycable-go` — official Docker image (`anycable/anycable-go:latest`) with `ANYCABLE_BROKER=memory`, `ANYCABLE_PRESETS=broker`, `ANYCABLE_PUBLIC=true`.
+
+### Set up
+
+1. Deploy `socketio-server` from this repo (uses `backend/Dockerfile`). Default `SERVICE_ENTRY` is `socketio/server`.
+2. Deploy `anycable-go` from the public image. Set the env above plus `ANYCABLE_HTTP_BROADCAST_SECRET=<your-secret>`.
+3. Create a second service from this repo for `bench-runner`. Set:
+   - `SERVICE_ENTRY=bench-runner/server`
+   - `ANYCABLE_BROADCAST_SECRET=<same secret>`
+4. Generate a public domain for `bench-runner` (so you can curl it from your machine).
+
+The bench-runner targets `*.railway.internal` by default. Override with `SOCKETIO_URL`, `ANYCABLE_URL`, `ANYCABLE_BROADCAST_URL` if your service names differ.
+
+### Run
+
+Each endpoint is synchronous: the request blocks until the run completes (typically 3–5 minutes at 10K) and returns the full result as JSON.
 
 ```bash
-# Deploy backend/ to Railway (uses backend/Dockerfile).
-# Then, from a second Railway instance (or any box with enough file descriptors):
+# AnyCable @ 10K — replace bench-runner-production with your domain
+curl --max-time 320 -X POST \
+  "https://bench-runner-production.up.railway.app/bench-jitter-anycable?n=10000&duration=200&msgs=120&interval=500&jitter=15&jitterMs=1000&ramp=300&stream=run-ac"
 
-SOCKETIO_URL=https://your-socketio.up.railway.app \
-  NUM_CLIENTS=5000 \
+# Default Socket.io @ 10K (set SOCKETIO_CSR=0 on socketio-server first)
+curl --max-time 320 -X POST \
+  "https://bench-runner-production.up.railway.app/bench-jitter-socketio?n=10000&duration=200&msgs=120&interval=500&jitter=15&jitterMs=1000&ramp=300&stream=run-d"
+
+# Socket.io + CSR @ 10K (set SOCKETIO_CSR=1 on socketio-server first; redeploy is automatic)
+curl --max-time 320 -X POST \
+  "https://bench-runner-production.up.railway.app/bench-jitter-socketio-csr?n=10000&duration=200&msgs=120&interval=500&jitter=15&jitterMs=1000&ramp=300&stream=run-csr"
+```
+
+Each response includes:
+
+- `deliveryRatePct`, `lostDeliveries`, `expectedDeliveries`, `receivedDeliveries`
+- `jitterEvents`, `csrResumes`, `csrResumeRatePct`, `connectFailures`
+- `latencyRawMs` and `latencyOverMinMs` — `{ avg, p50, p95, p99, max }` plus the `skewFloor` (clock skew between bench-runner and the broadcasting host)
+- `runnerPeakRssMb` — bench-runner process peak RSS
+
+### Server-side memory and CPU
+
+`bench-runner` doesn't itself measure server resources. Use the `railway-metrics.ts` helper to pull memory and CPU for each service over the test window from Railway's GraphQL API:
+
+```bash
+PROJECT_ID=<project-id> SERVICE_ID=<service-id> SERVICE_NAME=anycable-go \
+  START_DATE=2026-05-01T08:38:00Z END_DATE=2026-05-01T08:42:04Z SAMPLE_RATE=30 \
+  npm run bench:metrics
+```
+
+Authentication uses `RAILWAY_TOKEN` if set, otherwise reads `~/.railway/config.json` (the file the `railway` CLI writes after `railway login`).
+
+## Railway: avalanche at scale
+
+For the 5,000-client avalanche numbers, the Railway-hosted Socket.io server is restarted via the Railway CLI while clients are connected. The script runs locally; the disruption it measures is server-side, so client-side capacity isn't the constraint here.
+
+```bash
+SOCKETIO_URL=https://your-socketio.up.railway.app NUM_CLIENTS=5000 \
   npm run bench:avalanche:railway
 ```
 
-In a *separate* terminal, once the script reports "All clients connected":
+In a second terminal, when the script reports "All clients connected":
 
 ```bash
 railway restart -s socketio-server --yes
 ```
 
-The script waits up to 3 minutes for disconnects + reconnects and prints the summary.
+## Connection-capacity test
+
+The `socketio-server` exposes a small probe endpoint that opens N raw WebSocket connections to anycable-go (via internal network) and holds them. This is the test that produced the 50,000-idle number.
+
+```bash
+curl -X POST "https://your-socketio.up.railway.app/idle-anycable?n=10000&hold=30&ramp=300"
+# then watch the service logs:
+railway logs --service socketio-server | grep idle
+```
+
+For higher counts (20K, 50K), increase `n`. We hit a test-client TCP/port ceiling at ~56K — anycable-go's actual limit is higher.
 
 ## Environment variables
 
+### Bench scripts (local)
+
 | Variable           | Default                              | Used by                      |
 | ------------------ | ------------------------------------ | ---------------------------- |
-| `SOCKETIO_URL`     | `http://localhost:3000`              | jitter-socketio, avalanche-railway-socketio |
+| `SOCKETIO_URL`     | `http://localhost:3000`              | jitter-socketio*, avalanche-railway-socketio |
 | `ANYCABLE_URL`     | `ws://localhost:8080/cable`          | jitter-anycable, avalanche-anycable |
 | `BROADCAST_URL`    | `http://localhost:8090/_broadcast`   | publisher, avalanche-anycable |
 | `BROADCAST_SECRET` | *(empty)*                            | publisher — bearer token for AnyCable broadcast auth |
@@ -254,16 +284,46 @@ The script waits up to 3 minutes for disconnects + reconnects and prints the sum
 | `INTERVAL_MS`      | `200`                                | publisher — ms between messages |
 | `STREAM`           | `benchmark` / `avalanche`            | all scripts — stream name    |
 | `RAMP_RATE`        | `50`                                 | all bench scripts — new connections per second |
-| `PORT`             | `3000`                               | socketio server, avalanche-socketio |
-| `SOCKETIO_CSR`     | *(unset)*                            | socketio server — `1` enables Connection State Recovery |
-| `SOCKETIO_CSR_MAX_MS` | `120000` (2 min)                  | socketio server — `maxDisconnectionDuration` |
+
+### Servers
+
+| Variable               | Default              | Service          | Description |
+| ---------------------- | -------------------- | ---------------- | ----------- |
+| `SERVICE_ENTRY`        | `socketio/server`    | both             | Selects compiled entry point at container start |
+| `PORT`                 | `3000` / `3001`      | socketio-server / bench-runner | HTTP port |
+| `SOCKETIO_CSR`         | *(unset / `0`)*      | socketio-server  | `1` enables Connection State Recovery |
+| `SOCKETIO_CSR_MAX_MS`  | `120000` (2 min)     | socketio-server  | `maxDisconnectionDuration` for CSR |
+| `SOCKETIO_URL`         | `http://socketio-server.railway.internal:3000` | bench-runner | Target for socketio bench endpoints |
+| `ANYCABLE_URL`         | `ws://anycable-go.railway.internal:8080/cable` | bench-runner | Target for anycable bench endpoints |
+| `ANYCABLE_BROADCAST_URL` | `http://anycable-go.railway.internal:8080/_broadcast` | bench-runner | Broadcast endpoint for AnyCable runs |
+| `ANYCABLE_BROADCAST_SECRET` | *(empty)*       | bench-runner     | Bearer token if anycable-go has `ANYCABLE_HTTP_BROADCAST_SECRET` set |
+
+### railway-metrics
+
+| Variable        | Description |
+| --------------- | ----------- |
+| `PROJECT_ID`    | Railway project UUID (required) |
+| `SERVICE_ID`    | Railway service UUID (required) |
+| `SERVICE_NAME`  | Display name for the report |
+| `START_DATE`    | ISO8601 — start of metrics window (required) |
+| `END_DATE`      | ISO8601 — end of window (defaults to now) |
+| `SAMPLE_RATE`   | `30` — Railway enforces a minimum (~30s) for short windows |
+| `RAILWAY_TOKEN` | Optional override; falls back to `~/.railway/config.json` |
 
 ## Notes and caveats
 
-- **Socket.io Connection State Recovery** (4.6+, opt-in) buffers missed events when the adapter supports it (in-memory single-node, Redis Streams, or MongoDB — Redis pub/sub is **not** compatible). The docs call it experimental and state *"the recovery will not always be successful"*. We benchmark it directly via `jitter-socketio-csr.ts` so the comparison isn't against a strawman; see the results table above.
-- **Transports.** Both servers are configured to use WebSockets only, skipping Socket.io's long-polling upgrade handshake — a like-for-like comparison.
-- **AnyCable broker.** The benchmarks run with `--broker=memory`. In production, use `nats` or `redis` for multi-node pub/sub.
+- **CSR adapter choice.** We benchmarked CSR with the default in-memory adapter. With Redis Streams or MongoDB the latency tail might shift; the docs note CSR is incompatible with Redis pub/sub specifically.
+- **Like-for-like transports.** Both Socket.io and AnyCable run with WebSocket-only — no long-polling fallback for Socket.io.
+- **AnyCable broker.** Benchmarks use the in-memory broker; production deployments typically use NATS or Redis to survive restarts and run multi-node.
+- **Latency clock skew.** Publisher and clients run in different processes, possibly different containers. We report both raw and min-normalized latency so cross-variant comparisons are unaffected by skew.
+- **Connection capacity ceiling.** The 50K result is anycable-go's *current* idle-connection demonstration — anycable-go itself wasn't saturated; we hit a TCP outbound port ceiling on the Node test client. Real ceiling on this Pro tier is higher.
+
+## About
+
+Built by the [AnyCable](https://anycable.io) team alongside the comparison page at https://anycable.io/compare/socket-io. Reproducible benchmarks let any reader verify the claims; we keep the numbers honest by being able to re-run them.
+
+If you find a methodological flaw, open an issue or a PR — we'd rather fix it than leave a wrong number standing.
 
 ## License
 
-MIT.
+MIT — see [LICENSE](./LICENSE).

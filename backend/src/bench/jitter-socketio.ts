@@ -30,10 +30,20 @@ interface ClientResult {
   received: Set<number>;
   highestSeq: number;
   jitterCount: number;
+  latencies: number[]; // receivedAt - sentAt per message, in ms
+}
+
+function recordMessage(result: ClientResult, msg: any) {
+  if (msg?.seq === undefined) return;
+  result.received.add(msg.seq);
+  if (msg.seq > result.highestSeq) result.highestSeq = msg.seq;
+  if (typeof msg.sentAt === "number") {
+    result.latencies.push(Date.now() - msg.sentAt);
+  }
 }
 
 async function runClient(id: number): Promise<ClientResult> {
-  const result: ClientResult = { id, received: new Set(), highestSeq: 0, jitterCount: 0 };
+  const result: ClientResult = { id, received: new Set(), highestSeq: 0, jitterCount: 0, latencies: [] };
 
   let socket = io(url, {
     transports: ["websocket"],
@@ -47,12 +57,7 @@ async function runClient(id: number): Promise<ClientResult> {
   });
   socket.emit("join", stream);
 
-  socket.on("message", (msg: any) => {
-    if (msg?.seq !== undefined) {
-      result.received.add(msg.seq);
-      if (msg.seq > result.highestSeq) result.highestSeq = msg.seq;
-    }
-  });
+  socket.on("message", (msg: any) => recordMessage(result, msg));
 
   const endAt = Date.now() + testDurationSec * 1000;
   let nextJitter = Date.now() + (5 + Math.random() * jitterIntervalSec) * 1000;
@@ -88,12 +93,7 @@ async function runClient(id: number): Promise<ClientResult> {
       } catch {}
       if (socket.connected) {
         socket.emit("join", stream);
-        socket.on("message", (msg: any) => {
-          if (msg?.seq !== undefined) {
-            result.received.add(msg.seq);
-            if (msg.seq > result.highestSeq) result.highestSeq = msg.seq;
-          }
-        });
+        socket.on("message", (msg: any) => recordMessage(result, msg));
       }
 
       nextJitter = Date.now() + (jitterIntervalSec + Math.random() * 5) * 1000;
@@ -109,6 +109,13 @@ async function runClient(id: number): Promise<ClientResult> {
 const startTime = Date.now();
 const clientPromises: Promise<ClientResult>[] = [];
 
+// Snapshot client-process memory every 5s; report peak at the end.
+let peakRssMb = 0;
+const memTicker = setInterval(() => {
+  const rss = process.memoryUsage().rss / 1024 / 1024;
+  if (rss > peakRssMb) peakRssMb = rss;
+}, 5000);
+
 for (let i = 0; i < numClients; i++) {
   clientPromises.push(runClient(i));
   if ((i + 1) % rampRate === 0) {
@@ -118,6 +125,7 @@ for (let i = 0; i < numClients; i++) {
 }
 
 const results = await Promise.all(clientPromises);
+clearInterval(memTicker);
 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
 let totalReceived = 0;
@@ -137,6 +145,24 @@ const avgDeliveryRate = maxSeq > 0
   ? ((totalReceived / (maxSeq * numClients)) * 100).toFixed(2)
   : "N/A";
 
+// Aggregate latency across every received message.
+// Raw latencies depend on clock skew between publisher (Railway) and clients
+// (local). Normalized latencies subtract the minimum observed value, so the
+// floor is 0 and the spread reflects actual jitter / queueing delay.
+const latencies: number[] = [];
+for (const r of results) latencies.push(...r.latencies);
+latencies.sort((a, b) => a - b);
+const lp = (pct: number) =>
+  latencies.length ? latencies[Math.floor((latencies.length - 1) * (pct / 100))] : 0;
+const lavg = latencies.length
+  ? Math.round(latencies.reduce((s, n) => s + n, 0) / latencies.length)
+  : 0;
+const lmin = latencies.length ? latencies[0] : 0;
+const norm = latencies.map((v) => v - lmin);
+const np = (pct: number) =>
+  norm.length ? norm[Math.floor((norm.length - 1) * (pct / 100))] : 0;
+const navg = norm.length ? Math.round(norm.reduce((s, n) => s + n, 0) / norm.length) : 0;
+
 console.log(`\n=== Socket.io Jitter Results (${elapsed}s) ===`);
 console.log(`Clients:          ${numClients}`);
 console.log(`Messages sent:    ${maxSeq}`);
@@ -144,6 +170,9 @@ console.log(`Total jitters:    ${totalJitters} (avg ${(totalJitters / numClients
 console.log(`Messages received: ${totalReceived}`);
 console.log(`Messages lost:    ${totalLost}`);
 console.log(`Delivery rate:    ${avgDeliveryRate}%`);
+console.log(`Latency raw (ms): avg=${lavg}  p50=${lp(50)}  p95=${lp(95)}  p99=${lp(99)}  max=${lp(100)}  (n=${latencies.length})`);
+console.log(`Latency over min: avg=${navg}  p50=${np(50)}  p95=${np(95)}  p99=${np(99)}  max=${np(100)}  (skew floor=${lmin}ms)`);
+console.log(`Client peak RSS:  ${peakRssMb.toFixed(0)} MB`);
 
 if (totalLost > 0) {
   const lossy = results.filter((r) => r.highestSeq - r.received.size > 0).slice(0, 5);

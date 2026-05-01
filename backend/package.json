@@ -12,6 +12,7 @@
     "bench:avalanche:socketio": "tsx src/bench/avalanche-socketio.ts",
     "bench:avalanche:anycable": "tsx src/bench/avalanche-anycable.ts",
     "bench:avalanche:railway": "tsx src/bench/avalanche-railway-socketio.ts",
+    "bench:metrics": "tsx src/bench/railway-metrics.ts",
     "publish": "tsx src/publisher.ts",
     "build": "tsc",
     "start": "node dist/socketio/server.js"

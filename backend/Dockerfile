@@ -12,4 +12,6 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 EXPOSE 3000
-CMD ["node", "dist/socketio/server.js"]
+# SERVICE_ENTRY selects which compiled entry point to run.
+# Default = socketio/server. Set to bench-runner/server for the bench runner.
+CMD ["sh", "-c", "node dist/${SERVICE_ENTRY:-socketio/server}.js"]
