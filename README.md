@@ -270,20 +270,20 @@ For higher counts (20K, 50K), increase `n`. We hit a test-client TCP/port ceilin
 
 ### Bench scripts (local)
 
-| Variable           | Default                              | Used by                      |
-| ------------------ | ------------------------------------ | ---------------------------- |
-| `SOCKETIO_URL`     | `http://localhost:3000`              | jitter-socketio*, avalanche-railway-socketio |
-| `ANYCABLE_URL`     | `ws://localhost:8080/cable`          | jitter-anycable, avalanche-anycable |
-| `BROADCAST_URL`    | `http://localhost:8090/_broadcast`   | publisher, avalanche-anycable |
-| `BROADCAST_SECRET` | *(empty)*                            | publisher — bearer token for AnyCable broadcast auth |
-| `NUM_CLIENTS`      | `50` / `1000`                        | all bench scripts            |
-| `DURATION`         | `150`                                | jitter scripts — test length in seconds |
-| `JITTER_INTERVAL`  | `15`                                 | jitter scripts — seconds between disconnects |
-| `JITTER_DURATION`  | `1000`                               | jitter scripts — ms offline per event |
-| `TOTAL_MESSAGES`   | `600`                                | publisher                    |
-| `INTERVAL_MS`      | `200`                                | publisher — ms between messages |
-| `STREAM`           | `benchmark` / `avalanche`            | all scripts — stream name    |
-| `RAMP_RATE`        | `50`                                 | all bench scripts — new connections per second |
+| Variable           | Default                            | Used by                      |
+| ------------------ | ---------------------------------- | ---------------------------- |
+| `SOCKETIO_URL`     | `http://localhost:3000`            | jitter-socketio*, avalanche-railway-socketio |
+| `ANYCABLE_URL`     | `ws://localhost:8080/cable`        | jitter-anycable, avalanche-anycable |
+| `BROADCAST_URL`    | `http://localhost:8090/_broadcast` | jitter-anycable, avalanche-anycable, publisher |
+| `BROADCAST_SECRET` | *(empty)*                          | jitter-anycable, publisher — bearer token if anycable-go is started with `ANYCABLE_HTTP_BROADCAST_SECRET` |
+| `NUM_CLIENTS`      | `50` / `1000`                      | all bench scripts            |
+| `DURATION`         | `150`                              | jitter scripts — test length in seconds |
+| `JITTER_INTERVAL`  | `15`                               | jitter scripts — seconds between disconnects |
+| `JITTER_DURATION`  | `1000`                             | jitter scripts — ms offline per event |
+| `TOTAL_MESSAGES`   | `600`                              | jitter scripts (in-process publisher), standalone publisher |
+| `INTERVAL_MS`      | `200`                              | jitter scripts, publisher — ms between messages |
+| `STREAM`           | `benchmark` / `avalanche`          | all scripts — stream name    |
+| `RAMP_RATE`        | `50`                               | all bench scripts — new connections per second |
 
 ### Servers
 

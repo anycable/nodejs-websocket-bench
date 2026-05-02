@@ -1,6 +1,9 @@
-export {};
-// Publisher: sends sequential numbered messages via HTTP POST.
-// Uses a single persistent HTTP agent to avoid port exhaustion.
+// Standalone HTTP publisher — sends sequential numbered messages over a
+// single persistent HTTP agent (keep-alive, max 1 socket) to avoid port
+// exhaustion at scale.
+//
+// Most benches now publish in-process; this script is kept for ad-hoc
+// experiments and as a reference implementation.
 
 import http from "http";
 import https from "https";

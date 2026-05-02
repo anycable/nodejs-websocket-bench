@@ -4,18 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc",
+    "start": "node dist/socketio/server.js",
     "dev:socketio": "tsx src/socketio/server.ts",
+    "dev:socketio-csr": "SOCKETIO_CSR=1 tsx src/socketio/server.ts",
+    "dev:bench-runner": "tsx src/bench-runner/server.ts",
     "bench:jitter:socketio": "tsx src/bench/jitter-socketio.ts",
     "bench:jitter:socketio-csr": "tsx src/bench/jitter-socketio-csr.ts",
     "bench:jitter:anycable": "tsx src/bench/jitter-anycable.ts",
-    "dev:socketio-csr": "SOCKETIO_CSR=1 tsx src/socketio/server.ts",
     "bench:avalanche:socketio": "tsx src/bench/avalanche-socketio.ts",
-    "bench:avalanche:anycable": "tsx src/bench/avalanche-anycable.ts",
     "bench:avalanche:railway": "tsx src/bench/avalanche-railway-socketio.ts",
+    "bench:avalanche:anycable": "tsx src/bench/avalanche-anycable.ts",
     "bench:metrics": "tsx src/bench/railway-metrics.ts",
-    "publish": "tsx src/publisher.ts",
-    "build": "tsc",
-    "start": "node dist/socketio/server.js"
+    "publish": "tsx src/publisher.ts"
   },
   "dependencies": {
     "@anycable/core": "^1.1.6",

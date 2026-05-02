@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  typecheck:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,5 +17,5 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
         working-directory: backend
-      - run: npx tsc --noEmit
+      - run: npm run build
         working-directory: backend

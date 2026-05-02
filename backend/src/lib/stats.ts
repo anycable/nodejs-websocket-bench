@@ -34,14 +34,16 @@ export function recordMsg(stat: ClientStat, msg: unknown): void {
   if (typeof m.sentAt === "number") stat.latencies.push(Date.now() - m.sentAt);
 }
 
-// Linear-interpolation percentile against a pre-sorted array.
-function pct(sortedAsc: number[], p: number): number {
+// Index-based percentile against a pre-sorted ascending array. p in [0, 100].
+// Sort the array yourself before passing — we don't sort here so callers can
+// reuse the sorted view across percentile calls.
+export function percentile(sortedAsc: number[], p: number): number {
   if (sortedAsc.length === 0) return 0;
   const idx = Math.floor((sortedAsc.length - 1) * (p / 100));
   return sortedAsc[idx];
 }
 
-function avg(xs: number[]): number {
+export function avg(xs: number[]): number {
   if (xs.length === 0) return 0;
   return Math.round(xs.reduce((s, n) => s + n, 0) / xs.length);
 }
@@ -136,17 +138,17 @@ export function summarize(opts: SummarizeOptions): JitterResult {
     connectFailures: failedConnects,
     latencyRawMs: {
       avg: avg(allLatencies),
-      p50: pct(allLatencies, 50),
-      p95: pct(allLatencies, 95),
-      p99: pct(allLatencies, 99),
-      max: pct(allLatencies, 100),
+      p50: percentile(allLatencies, 50),
+      p95: percentile(allLatencies, 95),
+      p99: percentile(allLatencies, 99),
+      max: percentile(allLatencies, 100),
     },
     latencyOverMinMs: {
       avg: avg(norm),
-      p50: pct(norm, 50),
-      p95: pct(norm, 95),
-      p99: pct(norm, 99),
-      max: pct(norm, 100),
+      p50: percentile(norm, 50),
+      p95: percentile(norm, 95),
+      p99: percentile(norm, 99),
+      max: percentile(norm, 100),
       skewFloor: lmin,
     },
     latencySamples: allLatencies.length,

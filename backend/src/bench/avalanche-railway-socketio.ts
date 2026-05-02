@@ -15,6 +15,8 @@
 
 import { io, Socket } from "socket.io-client";
 
+import { percentile } from "../lib/stats.js";
+
 const url = process.env.SOCKETIO_URL;
 if (!url) {
   console.error("SOCKETIO_URL is required (e.g. https://your-socketio.up.railway.app)");
@@ -124,7 +126,7 @@ if (!allReconnectedAt) allReconnectedAt = Date.now();
 
 // Results
 reconnectTimes.sort((a, b) => a - b);
-const p = (pct: number) => reconnectTimes[Math.floor(reconnectTimes.length * pct / 100)] || 0;
+const p = (pct: number) => percentile(reconnectTimes, pct);
 const recoveryTime = allReconnectedAt - restartDetectedAt;
 
 console.log(`\n=== Socket.io Railway Avalanche Results ===`);

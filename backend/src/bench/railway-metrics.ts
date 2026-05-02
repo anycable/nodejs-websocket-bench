@@ -16,6 +16,8 @@
 import { readFileSync } from "fs";
 import { homedir } from "os";
 
+import { percentile } from "../lib/stats.js";
+
 function readToken(): string {
   if (process.env.RAILWAY_TOKEN) return process.env.RAILWAY_TOKEN;
   const cfg = JSON.parse(readFileSync(`${homedir()}/.railway/config.json`, "utf-8"));
@@ -88,9 +90,9 @@ function summarize(label: string, points: DataPoint[], unit: string, scale = 1) 
   }
   const values = points.map((p) => p.value * scale).sort((a, b) => a - b);
   const avg = values.reduce((s, n) => s + n, 0) / values.length;
-  const p50 = values[Math.floor((values.length - 1) * 0.5)];
-  const p95 = values[Math.floor((values.length - 1) * 0.95)];
-  const peak = values[values.length - 1];
+  const p50 = percentile(values, 50);
+  const p95 = percentile(values, 95);
+  const peak = percentile(values, 100);
   console.log(
     `${label.padEnd(16)} avg=${avg.toFixed(2)}${unit}  p50=${p50.toFixed(2)}${unit}  p95=${p95.toFixed(2)}${unit}  peak=${peak.toFixed(2)}${unit}  (n=${values.length})`
   );

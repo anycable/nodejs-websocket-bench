@@ -10,6 +10,8 @@
 import { io, Socket } from "socket.io-client";
 import { spawn, ChildProcess } from "child_process";
 
+import { percentile } from "../lib/stats.js";
+
 const numClients = parseInt(process.env.NUM_CLIENTS || "1000");
 const rampRate = parseInt(process.env.RAMP_RATE || "50");
 const stream = process.env.STREAM || "avalanche";
@@ -159,9 +161,9 @@ if (!allReconnectedAt) allReconnectedAt = Date.now();
 
 const recoveryTime = allReconnectedAt - restartTime;
 reconnectTimes.sort((a, b) => a - b);
-const p50 = reconnectTimes[Math.floor(reconnectTimes.length * 0.5)] || 0;
-const p95 = reconnectTimes[Math.floor(reconnectTimes.length * 0.95)] || 0;
-const p99 = reconnectTimes[Math.floor(reconnectTimes.length * 0.99)] || 0;
+const p50 = percentile(reconnectTimes, 50);
+const p95 = percentile(reconnectTimes, 95);
+const p99 = percentile(reconnectTimes, 99);
 
 console.log(`\n=== Socket.io Avalanche Results ===`);
 console.log(`Clients:              ${connected}`);
