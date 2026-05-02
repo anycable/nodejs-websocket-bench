@@ -21,6 +21,7 @@ import {
   runJitterSocketio,
   runJitterSocketioCsr,
 } from "../lib/jitter-runners.js";
+import { runIdleAnycable } from "../lib/idle-runner.js";
 
 const SOCKETIO_URL =
   process.env.SOCKETIO_URL || "http://socketio-server.railway.internal:3000";
@@ -62,6 +63,25 @@ app.post("/bench-jitter-socketio", async (req, res) => {
 app.post("/bench-jitter-socketio-csr", async (req, res) => {
   const params = paramsFromQuery(req);
   const result = await runJitterSocketioCsr(params, { serverUrl: SOCKETIO_URL });
+  res.json(result);
+});
+
+// Synchronous idle-connection probe. To exceed the per-container outbound
+// port limit (~64K), deploy multiple bench-runner instances and POST to
+// each in parallel — each container has its own source IP and ephemeral
+// port pool. See `bench/idle-multi.ts` for the coordinator.
+app.post("/bench-idle-anycable", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "10000", 10);
+  const holdSec = parseInt((req.query.hold as string) || "60", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const stream = (req.query.stream as string) || "idle-probe";
+  const shardLabel = (req.query.shard as string) || undefined;
+
+  const result = await runIdleAnycable(
+    { n, holdSec, rampPerSec, stream },
+    ANYCABLE_URL,
+    shardLabel
+  );
   res.json(result);
 });
 

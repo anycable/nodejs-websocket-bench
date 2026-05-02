@@ -256,15 +256,35 @@ railway restart -s socketio-server --yes
 
 ## Connection-capacity test
 
-The `socketio-server` exposes a small probe endpoint that opens N raw WebSocket connections to anycable-go (via internal network) and holds them. This is the test that produced the 50,000-idle number.
+The bench-runner exposes a synchronous probe — `POST /bench-idle-anycable` — that opens N raw WebSocket connections to anycable-go (via internal network), waits for `welcome` and `confirm_subscription` on each, holds for `holdSec`, and returns final counts.
+
+### Single-shard (up to ~50K)
 
 ```bash
-curl -X POST "https://your-socketio.up.railway.app/idle-anycable?n=10000&hold=30&ramp=300"
-# then watch the service logs:
-railway logs --service socketio-server | grep idle
+curl --max-time 600 -X POST \
+  "https://bench-runner.up.railway.app/bench-idle-anycable?n=50000&hold=120&ramp=300"
 ```
 
-For higher counts (20K, 50K), increase `n`. We hit a test-client TCP/port ceiling at ~56K — anycable-go's actual limit is higher.
+Each Linux container has a per-source-IP outbound port pool of ~64K, which caps any single shard at ~50K useful connections.
+
+### Multi-shard (100K+)
+
+To go beyond one container's port pool, deploy multiple bench-runner instances and fan out from a coordinator. Each shard runs in its own Railway container with its own source IP and ephemeral port range, so they don't compete.
+
+1. Deploy 4 copies of the bench-runner service (e.g., `bench-runner-1` … `bench-runner-4`), each with `SERVICE_ENTRY=bench-runner/server` and a public domain.
+2. Coordinate from a developer machine:
+
+```bash
+SHARDS="https://bench-runner-1.up.railway.app,https://bench-runner-2.up.railway.app,https://bench-runner-3.up.railway.app,https://bench-runner-4.up.railway.app" \
+  PER_SHARD_N=25000 HOLD_SEC=120 RAMP_PER_SEC=200 \
+  PROJECT_ID=<railway-project-uuid> SERVICE_ID=<anycable-go-service-uuid> \
+  SERVICE_NAME=anycable-go \
+  npm run bench:idle:multi
+```
+
+This fans out 4 × 25,000 = 100,000 connections to one anycable-go instance, then queries Railway metrics over the test window and prints ASCII charts of memory + CPU plus a CSV time-series for offline plotting.
+
+`PROJECT_ID` and `SERVICE_ID` are optional — without them the script reports aggregate counts only.
 
 ## Environment variables
 

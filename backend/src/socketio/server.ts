@@ -135,94 +135,11 @@ app.post("/publish", async (req, res) => {
   console.log(`Published ${total} messages to ${target}`);
 });
 
-// Idle connection capacity probe against anycable-go.
-//
-// Opens N raw WebSocket connections directly to anycable-go (using
-// `actioncable-v1-ext-json` subprotocol so it's the same connection type a
-// real client would establish), waits for "welcome", subscribes to a stream,
-// then holds for `hold` seconds. This runs from inside Railway, so the
-// connection count is bounded by anycable-go's capacity, not the local NAT
-// table on a developer machine.
-//
-// POST /idle-anycable?n=10000&hold=60&url=ws://anycable-go.railway.internal:8080/cable
-import WebSocket from "ws";
-
-interface IdleResult {
-  connected: number;
-  failed: number;
-  welcomed: number;
-  subscribed: number;
-}
-
-app.post("/idle-anycable", async (req, res) => {
-  const n = parseInt((req.query.n as string) || "1000");
-  const holdSec = parseInt((req.query.hold as string) || "30");
-  const url = (req.query.url as string) || "ws://anycable-go.railway.internal:8080/cable";
-  const stream = (req.query.stream as string) || "idle-probe";
-  const rampPerSec = parseInt((req.query.ramp as string) || "200");
-
-  res.json({ status: "starting", n, holdSec, url, stream, rampPerSec });
-
-  console.log(`[idle] connecting ${n} clients to ${url}, ramp=${rampPerSec}/s, hold=${holdSec}s`);
-
-  const result: IdleResult = { connected: 0, failed: 0, welcomed: 0, subscribed: 0 };
-  const sockets: WebSocket[] = [];
-
-  for (let i = 0; i < n; i++) {
-    const ws = new WebSocket(url, ["actioncable-v1-ext-json"]);
-    sockets.push(ws);
-
-    ws.once("open", () => {
-      result.connected++;
-    });
-    ws.once("error", () => {
-      result.failed++;
-    });
-    ws.on("message", (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString());
-        if (msg.type === "welcome") {
-          result.welcomed++;
-          // Subscribe to a $pubsub stream — the broker preset accepts this
-          // without RPC since ANYCABLE_PUBLIC=true.
-          const cmd = {
-            command: "subscribe",
-            identifier: JSON.stringify({ channel: "$pubsub", stream_name: stream }),
-          };
-          ws.send(JSON.stringify(cmd));
-        } else if (msg.type === "confirm_subscription") {
-          result.subscribed++;
-        }
-      } catch {}
-    });
-
-    if ((i + 1) % rampPerSec === 0) {
-      await new Promise((r) => setTimeout(r, 1000));
-      if ((i + 1) % 1000 === 0) {
-        console.log(
-          `[idle] ramped ${i + 1}/${n}  connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
-        );
-      }
-    }
-  }
-
-  // Stabilize, then hold.
-  await new Promise((r) => setTimeout(r, 5000));
-  console.log(
-    `[idle] all ramped: connected=${result.connected}/${n} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
-  );
-  console.log(`[idle] holding ${holdSec}s...`);
-  await new Promise((r) => setTimeout(r, holdSec * 1000));
-
-  console.log(
-    `[idle] hold complete. final: connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
-  );
-
-  // Tear down.
-  for (const s of sockets) {
-    try { s.close(); } catch {}
-  }
-});
+// Note: the idle-connection capacity probe used to live here; it's been
+// moved to the bench-runner as POST /bench-idle-anycable. The bench-runner
+// is the right home — it's the load-generation service, can be deployed
+// in multiple instances for shard scale-out, and uses the synchronous
+// runner pattern shared with the jitter benches.
 
 const port = parseInt(process.env.PORT || "3000");
 httpServer.listen(port, () => {
