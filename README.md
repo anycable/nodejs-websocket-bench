@@ -84,30 +84,33 @@ The latency gap between CSR and AnyCable comes from how each replays. CSR drains
 ```
 benchmark/
 ├── docker-compose.yml        # Local Socket.io + anycable-go
-├── railway.toml              # Railway deploy config (socketio-server)
+├── railway.toml              # Railway deploy config
 └── backend/
-    ├── Dockerfile            # Same image for socketio-server and bench-runner;
-    │                         # SERVICE_ENTRY env selects which entry point.
+    ├── Dockerfile            # One image, two entry points (SERVICE_ENTRY env selects)
     ├── package.json
     └── src/
-        ├── publisher.ts             # HTTP publisher (sequential, numbered)
-        ├── socketio/
-        │   └── server.ts            # Socket.io server (with /_broadcast, /publish-local)
-        ├── bench-runner/
-        │   └── server.ts            # Railway-hosted bench-runner (10K+ scale)
-        └── bench/
-            ├── jitter-socketio.ts          # Local: delivery under jitter — Socket.io (default)
-            ├── jitter-socketio-csr.ts      # Local: delivery under jitter — Socket.io + CSR
-            ├── jitter-anycable.ts          # Local: delivery under jitter — AnyCable
-            ├── avalanche-socketio.ts       # Local deploy simulation — Socket.io
-            ├── avalanche-railway-socketio.ts  # Railway deploy — Socket.io
-            ├── avalanche-anycable.ts       # Deploy simulation — AnyCable
-            └── railway-metrics.ts          # Pull memory/CPU from Railway GraphQL API
+        ├── publisher.ts             # Standalone HTTP publisher (rarely needed now)
+        ├── socketio/server.ts       # Socket.io server (/_broadcast + /publish-local)
+        ├── bench-runner/server.ts   # Railway-hosted bench-runner — thin HTTP wrapper
+        ├── bench/
+        │   ├── jitter-socketio.ts          # Local — delivery under jitter, Socket.io
+        │   ├── jitter-socketio-csr.ts      # Local — delivery under jitter, Socket.io + CSR
+        │   ├── jitter-anycable.ts          # Local — delivery under jitter, AnyCable
+        │   ├── avalanche-socketio.ts       # Local — deploy simulation, Socket.io
+        │   ├── avalanche-railway-socketio.ts  # Railway-restart avalanche, Socket.io
+        │   ├── avalanche-anycable.ts       # Deploy "simulation" (no-op), AnyCable
+        │   └── railway-metrics.ts          # Pull memory / CPU from Railway GraphQL
+        └── lib/                     # Shared core — single source of truth
+            ├── params.ts                   # Param parsing (env or query-string)
+            ├── stats.ts                    # ClientStat, percentiles, summarize
+            └── jitter-runners.ts           # runJitter{Anycable,Socketio,SocketioCsr}
 ```
 
 ## Two run modes
 
-**Local (small scale, dev laptop).** The `src/bench/jitter-*.ts` and `src/bench/avalanche-*.ts` scripts each run thousands of WebSocket clients from one Node process. Comfortable up to ~1,000 clients on a developer machine; beyond that you'll hit local NAT or event-loop limits.
+The local CLI scripts and the Railway-hosted HTTP endpoints both call the same `runJitter*` functions in `src/lib/jitter-runners.ts`, so headline numbers are produced by exactly the same code regardless of where you run them.
+
+**Local (small scale, dev laptop).** Each `src/bench/jitter-*.ts` script reads env vars, calls a runner, prints a human-readable report. Comfortable up to ~1,000 clients on a developer machine; beyond that you'll hit local NAT or event-loop limits.
 
 **Railway-hosted bench-runner (10K+).** `src/bench-runner/server.ts` is an Express app that runs as a separate Railway service in the same project as `socketio-server` and `anycable-go`. It uses Railway's internal network (`*.railway.internal`) to reach the targets — no NAT, no public-internet round-trip, no client-side bottlenecks. This is how the 10K headline numbers above were produced.
 
@@ -125,7 +128,7 @@ npm install
 
 ### Run the three jitter variants at small scale
 
-Start the servers (CSR controlled via env on the Socket.io server):
+Start the servers in two terminals:
 
 ```bash
 # Terminal 1 — Socket.io (default, no CSR)
@@ -138,29 +141,26 @@ npm run dev:socketio-csr              # :3000, SOCKETIO_CSR=1
 anycable-go --port 8080 --broker=memory --presets=broker --public
 ```
 
-Run any of the three benches (each is a separate process; pick one):
+Run any of the three benches in a third terminal — each script publishes its own messages, so no separate publisher process is needed:
 
 ```bash
-# Default Socket.io
-BROADCAST_URL=http://localhost:3000/_broadcast TOTAL_MESSAGES=60 INTERVAL_MS=500 \
-  npm run publish &
-SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=40 \
+# Default Socket.io (publishes via socketio-server's /publish-local — io.to().emit())
+SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=60 \
+  TOTAL_MESSAGES=60 INTERVAL_MS=500 \
   npm run bench:jitter:socketio
 
 # Socket.io + CSR (server must be started with SOCKETIO_CSR=1)
-BROADCAST_URL=http://localhost:3000/_broadcast TOTAL_MESSAGES=60 INTERVAL_MS=500 \
-  npm run publish &
-SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=40 \
+SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=60 \
+  TOTAL_MESSAGES=60 INTERVAL_MS=500 \
   npm run bench:jitter:socketio-csr
 
-# AnyCable
-BROADCAST_URL=http://localhost:8090/_broadcast TOTAL_MESSAGES=60 INTERVAL_MS=500 \
-  npm run publish &
-ANYCABLE_URL=ws://localhost:8080/cable NUM_CLIENTS=50 DURATION=40 \
+# AnyCable (publishes via anycable-go's /_broadcast over HTTP)
+ANYCABLE_URL=ws://localhost:8080/cable BROADCAST_URL=http://localhost:8090/_broadcast \
+  NUM_CLIENTS=50 DURATION=60 TOTAL_MESSAGES=60 INTERVAL_MS=500 \
   npm run bench:jitter:anycable
 ```
 
-Each script prints delivery rate, jitter event count, latency percentiles (raw + min-normalized), and client-side peak RSS.
+Each script prints delivery rate, jitter event count, latency percentiles (raw + min-normalized), and runner-process peak RSS.
 
 ### Local avalanche test (Socket.io spawns, kills, restarts)
 

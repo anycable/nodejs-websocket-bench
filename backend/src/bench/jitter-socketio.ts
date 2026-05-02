@@ -1,188 +1,22 @@
-// Delivery under jitter — Socket.io version
-//
-// Uses socket.io-client — the official Socket.io client.
-// Socket.io auto-reconnects but has NO message recovery.
-// Messages sent during disconnection are permanently lost.
-//
-// Each client randomly drops its connection for ~1s every ~15s.
-// After the test, count which sequence numbers each client received.
+// Local jitter benchmark — Socket.io (default, no CSR).
+// Thin wrapper around the shared runner; see src/lib/jitter-runners.ts.
 //
 // Usage:
-//   SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=100 tsx src/bench/jitter-socketio.ts
+//   SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=150 \
+//     tsx src/bench/jitter-socketio.ts
+//
+// The runner publishes via socketio-server's /publish-local endpoint,
+// matching the realistic in-process io.to().emit() fan-out.
 
-import { io } from "socket.io-client";
+import { paramsFromEnv } from "../lib/params.js";
+import { runJitterSocketio } from "../lib/jitter-runners.js";
+import { formatHumanReport } from "../lib/stats.js";
 
-const url = process.env.SOCKETIO_URL || "http://localhost:3000";
-const numClients = parseInt(process.env.NUM_CLIENTS || "50");
-const stream = process.env.STREAM || "benchmark";
-const testDurationSec = parseInt(process.env.DURATION || "150");
-const jitterIntervalSec = parseInt(process.env.JITTER_INTERVAL || "15");
-const jitterDurationMs = parseInt(process.env.JITTER_DURATION || "1000");
+const params = paramsFromEnv();
 
-const rampRate = parseInt(process.env.RAMP_RATE || "50"); // new connections per second
+const result = await runJitterSocketio(params, {
+  serverUrl: process.env.SOCKETIO_URL || "http://localhost:3000",
+});
 
-console.log(`Socket.io jitter test: ${numClients} clients, stream=${stream}, url=${url}`);
-console.log(`Ramp-up: ${rampRate} connections/sec (~${Math.ceil(numClients / rampRate)}s)`);
-console.log(`Jitter: disconnect ~${jitterDurationMs}ms every ~${jitterIntervalSec}s`);
-
-interface ClientResult {
-  id: number;
-  received: Set<number>;
-  highestSeq: number;
-  jitterCount: number;
-  latencies: number[]; // receivedAt - sentAt per message, in ms
-}
-
-function recordMessage(result: ClientResult, msg: any) {
-  if (msg?.seq === undefined) return;
-  result.received.add(msg.seq);
-  if (msg.seq > result.highestSeq) result.highestSeq = msg.seq;
-  if (typeof msg.sentAt === "number") {
-    result.latencies.push(Date.now() - msg.sentAt);
-  }
-}
-
-async function runClient(id: number): Promise<ClientResult> {
-  const result: ClientResult = { id, received: new Set(), highestSeq: 0, jitterCount: 0, latencies: [] };
-
-  let socket = io(url, {
-    transports: ["websocket"],
-    reconnection: false,
-    timeout: 10000,
-  });
-
-  await new Promise<void>((resolve) => {
-    socket.on("connect", resolve);
-    setTimeout(resolve, 10000);
-  });
-  socket.emit("join", stream);
-
-  socket.on("message", (msg: any) => recordMessage(result, msg));
-
-  const endAt = Date.now() + testDurationSec * 1000;
-  let nextJitter = Date.now() + (5 + Math.random() * jitterIntervalSec) * 1000;
-
-  while (Date.now() < endAt) {
-    if (Date.now() >= nextJitter) {
-      result.jitterCount++;
-
-      // Forcefully kill the TCP socket — mimics real network failure.
-      // No clean close, no goodbye. Just like WiFi dropping.
-      const rawSocket = (socket as any).io?.engine?.transport?.ws;
-      if (rawSocket?.terminate) {
-        rawSocket.terminate();
-      } else {
-        socket.disconnect();
-      }
-
-      await new Promise((r) => setTimeout(r, jitterDurationMs));
-
-      // Reconnect — Socket.io reconnects but has NO catch-up mechanism.
-      // Messages sent during the outage are permanently lost.
-      socket = io(url, {
-        transports: ["websocket"],
-        reconnection: false,
-        timeout: 5000,
-      });
-      try {
-        await new Promise<void>((resolve, reject) => {
-          socket.on("connect", resolve);
-          socket.on("connect_error", reject);
-          setTimeout(resolve, 5000); // don't block forever
-        });
-      } catch {}
-      if (socket.connected) {
-        socket.emit("join", stream);
-        socket.on("message", (msg: any) => recordMessage(result, msg));
-      }
-
-      nextJitter = Date.now() + (jitterIntervalSec + Math.random() * 5) * 1000;
-    }
-
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  socket.disconnect();
-  return result;
-}
-
-const startTime = Date.now();
-const clientPromises: Promise<ClientResult>[] = [];
-
-// Snapshot client-process memory every 5s; report peak at the end.
-let peakRssMb = 0;
-const memTicker = setInterval(() => {
-  const rss = process.memoryUsage().rss / 1024 / 1024;
-  if (rss > peakRssMb) peakRssMb = rss;
-}, 5000);
-
-for (let i = 0; i < numClients; i++) {
-  clientPromises.push(runClient(i));
-  if ((i + 1) % rampRate === 0) {
-    await new Promise((r) => setTimeout(r, 1000));
-    if ((i + 1) % 1000 === 0) console.log(`Connected ${i + 1}/${numClients} clients...`);
-  }
-}
-
-const results = await Promise.all(clientPromises);
-clearInterval(memTicker);
-const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
-let totalReceived = 0;
-let totalLost = 0;
-let totalJitters = 0;
-const maxSeq = Math.max(...results.map((r) => r.highestSeq));
-
-for (const r of results) {
-  const expected = r.highestSeq;
-  const lost = expected - r.received.size;
-  totalReceived += r.received.size;
-  totalLost += Math.max(0, lost);
-  totalJitters += r.jitterCount;
-}
-
-const avgDeliveryRate = maxSeq > 0
-  ? ((totalReceived / (maxSeq * numClients)) * 100).toFixed(2)
-  : "N/A";
-
-// Aggregate latency across every received message.
-// Raw latencies depend on clock skew between publisher (Railway) and clients
-// (local). Normalized latencies subtract the minimum observed value, so the
-// floor is 0 and the spread reflects actual jitter / queueing delay.
-const latencies: number[] = [];
-for (const r of results) latencies.push(...r.latencies);
-latencies.sort((a, b) => a - b);
-const lp = (pct: number) =>
-  latencies.length ? latencies[Math.floor((latencies.length - 1) * (pct / 100))] : 0;
-const lavg = latencies.length
-  ? Math.round(latencies.reduce((s, n) => s + n, 0) / latencies.length)
-  : 0;
-const lmin = latencies.length ? latencies[0] : 0;
-const norm = latencies.map((v) => v - lmin);
-const np = (pct: number) =>
-  norm.length ? norm[Math.floor((norm.length - 1) * (pct / 100))] : 0;
-const navg = norm.length ? Math.round(norm.reduce((s, n) => s + n, 0) / norm.length) : 0;
-
-console.log(`\n=== Socket.io Jitter Results (${elapsed}s) ===`);
-console.log(`Clients:          ${numClients}`);
-console.log(`Messages sent:    ${maxSeq}`);
-console.log(`Total jitters:    ${totalJitters} (avg ${(totalJitters / numClients).toFixed(1)} per client)`);
-console.log(`Messages received: ${totalReceived}`);
-console.log(`Messages lost:    ${totalLost}`);
-console.log(`Delivery rate:    ${avgDeliveryRate}%`);
-console.log(`Latency raw (ms): avg=${lavg}  p50=${lp(50)}  p95=${lp(95)}  p99=${lp(99)}  max=${lp(100)}  (n=${latencies.length})`);
-console.log(`Latency over min: avg=${navg}  p50=${np(50)}  p95=${np(95)}  p99=${np(99)}  max=${np(100)}  (skew floor=${lmin}ms)`);
-console.log(`Client peak RSS:  ${peakRssMb.toFixed(0)} MB`);
-
-if (totalLost > 0) {
-  const lossy = results.filter((r) => r.highestSeq - r.received.size > 0).slice(0, 5);
-  for (const r of lossy) {
-    const missing: number[] = [];
-    for (let i = 1; i <= r.highestSeq; i++) {
-      if (!r.received.has(i)) missing.push(i);
-    }
-    console.log(`  Client ${r.id}: missing sequences ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "..." : ""}`);
-  }
-}
-
-process.exit(totalLost > 0 ? 1 : 0);
+console.log(formatHumanReport("Socket.io Jitter (default, no CSR)", result));
+process.exit(result.lostDeliveries > 0 ? 1 : 0);
