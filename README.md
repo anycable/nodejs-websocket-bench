@@ -71,6 +71,8 @@ About 40 KB per connection in steady state. To exceed a single Linux container's
 
 **AnyCable Pro (v1.6.13)** held the same 200,000 connections on **3.56 GB** and **1.94% CPU (~0.6 vCPU)** — about **2.4× more memory-efficient** at the same load (~17.8 KB/connection vs ~42 KB/connection for OSS). Same Railway Pro tier, same broker preset, same protocol; only the binary differs.
 
+Pushed all the way, Pro held **999,954 of 1,000,000 idle connections** on the same single Pro-tier instance — peak memory **19.34 GB**, peak CPU **9.37%** (~3 vCPU). 25 test-client shards × 40,000 each. Single process, no Redis or NATS backplane.
+
 ## Why the results are what they are
 
 **Delivery — three protocols, three behaviours.**
