@@ -44,11 +44,15 @@ app.get("/health", (_req, res) =>
   })
 );
 
+// `?cableUrl=` and `?broadcastUrl=` override the defaults so we can target
+// either anycable-go (OSS) or anycable-go-pro within the same project.
 app.post("/bench-jitter-anycable", async (req, res) => {
   const params = paramsFromQuery(req);
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+  const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
   const result = await runJitterAnycable(params, {
-    cableUrl: ANYCABLE_URL,
-    broadcastUrl: ANYCABLE_BROADCAST_URL,
+    cableUrl,
+    broadcastUrl,
     broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
   });
   res.json(result);

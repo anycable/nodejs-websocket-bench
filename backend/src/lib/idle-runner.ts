@@ -48,11 +48,17 @@ export async function runIdleAnycable(
     const ws = new WebSocket(cableUrl, ["actioncable-v1-ext-json"]);
     sockets.push(ws);
 
+    // `failed` should count connection ATTEMPTS that never opened —
+    // not transient errors on already-established sockets (which can
+    // fire on idle ping timeouts or during tear-down, both of which
+    // we don't want to double-count against `connected`).
+    let opened = false;
     ws.once("open", () => {
+      opened = true;
       result.connected++;
     });
     ws.once("error", () => {
-      result.failed++;
+      if (!opened) result.failed++;
     });
     ws.on("message", (raw) => {
       try {
