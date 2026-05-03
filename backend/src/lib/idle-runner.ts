@@ -11,6 +11,7 @@
 // coordinator that fans out and aggregates.
 
 import WebSocket from "ws";
+import { io as ioClient, Socket } from "socket.io-client";
 
 export interface IdleParams {
   n: number;
@@ -116,6 +117,96 @@ export async function runIdleAnycable(
     for (const s of sockets.slice(i, i + 500)) {
       try {
         s.close();
+      } catch {
+        /* ignore tear-down errors */
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  return {
+    ...result,
+    rampElapsedMs,
+    holdElapsedMs,
+    totalElapsedMs: Date.now() - startedAt,
+    shardLabel,
+  };
+}
+
+
+// Same shape, different transport: opens socket.io-client connections
+// against a Socket.io server, emits `join` once connected, holds, tears
+// down. Maps cleanly into the same IdleResult so coordinators can fan
+// out to either anycable or socketio shards via the same plumbing.
+//
+// Note: `welcomed` and `subscribed` are not separate concepts in
+// Socket.io — once `connect` fires we count both. We keep the field
+// names identical to AnyCable's report so aggregation code is shared.
+export async function runIdleSocketio(
+  p: IdleParams,
+  serverUrl: string,
+  shardLabel?: string
+): Promise<IdleResult> {
+  const tag = shardLabel ? `[idle-sio:${shardLabel}]` : "[idle-sio]";
+  console.log(
+    `${tag} target=${serverUrl} n=${p.n} ramp=${p.rampPerSec}/s hold=${p.holdSec}s`
+  );
+
+  const result = { connected: 0, welcomed: 0, subscribed: 0, failed: 0 };
+  const sockets: Socket[] = [];
+  const startedAt = Date.now();
+
+  for (let i = 0; i < p.n; i++) {
+    const sock = ioClient(serverUrl, {
+      transports: ["websocket"],
+      reconnection: false,
+      timeout: 10000,
+    });
+    sockets.push(sock);
+
+    let opened = false;
+    sock.once("connect", () => {
+      opened = true;
+      result.connected++;
+      result.welcomed++;
+      sock.emit("join", p.stream);
+      // Treat the post-connect emit as our "subscribe" milestone since
+      // socket.io's `join` is fire-and-forget (no ack from server).
+      result.subscribed++;
+    });
+    sock.once("connect_error", () => {
+      if (!opened) result.failed++;
+    });
+
+    if ((i + 1) % p.rampPerSec === 0) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if ((i + 1) % 1000 === 0) {
+        console.log(
+          `${tag} ramped ${i + 1}/${p.n}  connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
+        );
+      }
+    }
+  }
+
+  await new Promise((r) => setTimeout(r, 5000));
+  const rampElapsedMs = Date.now() - startedAt;
+  console.log(
+    `${tag} all ramped (${rampElapsedMs}ms): connected=${result.connected}/${p.n} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
+  );
+
+  console.log(`${tag} holding ${p.holdSec}s...`);
+  const holdStartedAt = Date.now();
+  await new Promise((r) => setTimeout(r, p.holdSec * 1000));
+  const holdElapsedMs = Date.now() - holdStartedAt;
+
+  console.log(
+    `${tag} hold complete: connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
+  );
+
+  for (let i = 0; i < sockets.length; i += 500) {
+    for (const s of sockets.slice(i, i + 500)) {
+      try {
+        s.disconnect();
       } catch {
         /* ignore tear-down errors */
       }

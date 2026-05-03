@@ -21,7 +21,7 @@ import {
   runJitterSocketio,
   runJitterSocketioCsr,
 } from "../lib/jitter-runners.js";
-import { runIdleAnycable } from "../lib/idle-runner.js";
+import { runIdleAnycable, runIdleSocketio } from "../lib/idle-runner.js";
 
 const SOCKETIO_URL =
   process.env.SOCKETIO_URL || "http://socketio-server.railway.internal:3000";
@@ -88,6 +88,29 @@ app.post("/bench-idle-anycable", async (req, res) => {
   const result = await runIdleAnycable(
     { n, holdSec, rampPerSec, stream },
     cableUrl,
+    shardLabel
+  );
+  res.json(result);
+});
+
+// Socket.io idle probe — same shape as the AnyCable variant. Useful for
+// measuring where Node-based Socket.io tops out per single instance on
+// the same hardware that anycable-go is benchmarked against.
+//
+// `?serverUrl=` overrides the default target so the same shard can hit
+// either the existing socketio-server service or any other Socket.io
+// endpoint over Railway's internal network.
+app.post("/bench-idle-socketio", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "10000", 10);
+  const holdSec = parseInt((req.query.hold as string) || "60", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const stream = (req.query.stream as string) || "idle-probe";
+  const shardLabel = (req.query.shard as string) || undefined;
+  const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
+
+  const result = await runIdleSocketio(
+    { n, holdSec, rampPerSec, stream },
+    serverUrl,
     shardLabel
   );
   res.json(result);

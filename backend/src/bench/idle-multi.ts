@@ -53,6 +53,16 @@ const stream = process.env.STREAM || "idle-probe";
 // different anycable-go service (e.g. anycable-go-pro for the Pro variant).
 const cableUrl = process.env.CABLE_URL;
 
+// TARGET=socketio switches the test to /bench-idle-socketio (Node-based
+// Socket.io). Defaults to anycable for backwards compatibility.
+const target = (process.env.TARGET || "anycable").toLowerCase();
+if (target !== "anycable" && target !== "socketio") {
+  console.error(`TARGET must be "anycable" or "socketio" (got "${target}")`);
+  process.exit(1);
+}
+// SERVER_URL overrides the Socket.io target (TARGET=socketio variant).
+const socketioServerUrl = process.env.SERVER_URL;
+
 const totalTarget = perShardN * shardUrls.length;
 
 console.log(
@@ -74,12 +84,14 @@ async function runShard(url: string, label: string): Promise<IdleResult> {
     stream,
     shard: label,
   });
-  if (cableUrl) qs.set("cableUrl", cableUrl);
+  if (target === "anycable" && cableUrl) qs.set("cableUrl", cableUrl);
+  if (target === "socketio" && socketioServerUrl) qs.set("serverUrl", socketioServerUrl);
+  const endpoint = target === "socketio" ? "bench-idle-socketio" : "bench-idle-anycable";
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), SHARD_TIMEOUT_MS);
   try {
-    const res = await fetch(`${url}/bench-idle-anycable?${qs.toString()}`, {
+    const res = await fetch(`${url}/${endpoint}?${qs.toString()}`, {
       method: "POST",
       signal: ctrl.signal,
     });
