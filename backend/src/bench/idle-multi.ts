@@ -62,6 +62,10 @@ console.log(`Hold:   ${holdSec}s  Ramp: ${rampPerSec}/s per shard\n`);
 shardUrls.forEach((u, i) => console.log(`  shard-${i + 1}: ${u}`));
 console.log("");
 
+// Per-shard hard timeout — bumps fetch's headers timeout, but also acts as
+// an absolute ceiling so one hung shard can't block the whole report.
+const SHARD_TIMEOUT_MS = parseInt(process.env.SHARD_TIMEOUT_MS || "600000", 10);
+
 async function runShard(url: string, label: string): Promise<IdleResult> {
   const qs = new URLSearchParams({
     n: String(perShardN),
@@ -71,27 +75,55 @@ async function runShard(url: string, label: string): Promise<IdleResult> {
     shard: label,
   });
   if (cableUrl) qs.set("cableUrl", cableUrl);
-  const res = await fetch(`${url}/bench-idle-anycable?${qs.toString()}`, {
-    method: "POST",
-  });
-  if (!res.ok) {
-    throw new Error(`${label} returned ${res.status} ${res.statusText}`);
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), SHARD_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${url}/bench-idle-anycable?${qs.toString()}`, {
+      method: "POST",
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`${label} returned ${res.status} ${res.statusText}`);
+    }
+    const result = (await res.json()) as IdleResult;
+    // Stream this shard's outcome immediately so a later stall can't lose it.
+    console.log(
+      `  ✓ ${label}: connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed} ramp=${(result.rampElapsedMs / 1000).toFixed(1)}s`
+    );
+    return result;
+  } catch (err) {
+    console.log(
+      `  ✗ ${label}: ${err instanceof Error ? err.message : String(err)}`
+    );
+    throw err;
+  } finally {
+    clearTimeout(t);
   }
-  return (await res.json()) as IdleResult;
 }
 
 const startedAt = new Date();
 const startedAtIso = startedAt.toISOString();
 console.log(`Test started at ${startedAtIso}\n`);
 
+// Use allSettled: a single shard's HTTP failure (502, network glitch, etc.)
+// shouldn't lose the other shards' results. We report partial-success and
+// keep going so the metrics chart still has data.
 const shardPromises = shardUrls.map((u, i) => runShard(u, `shard-${i + 1}`));
-const results = await Promise.all(shardPromises);
+const settled = await Promise.allSettled(shardPromises);
 
 const endedAt = new Date();
 const endedAtIso = endedAt.toISOString();
 
 // -------------------------------------------------------------------------
 // Aggregate
+
+const results: IdleResult[] = [];
+const errors: { idx: number; reason: string }[] = [];
+settled.forEach((s, i) => {
+  if (s.status === "fulfilled") results.push(s.value);
+  else errors.push({ idx: i + 1, reason: String(s.reason).slice(0, 200) });
+});
 
 const totals = results.reduce(
   (acc, r) => ({
@@ -103,12 +135,12 @@ const totals = results.reduce(
   { connected: 0, welcomed: 0, subscribed: 0, failed: 0 }
 );
 
-console.log(`\n=== Per-shard results ===`);
-results.forEach((r, i) => {
+// Per-shard outcomes were already streamed via runShard; no need to repeat.
+if (errors.length > 0) {
   console.log(
-    `  shard-${i + 1}: connected=${r.connected} welcomed=${r.welcomed} subscribed=${r.subscribed} failed=${r.failed} ramp=${(r.rampElapsedMs / 1000).toFixed(1)}s`
+    `\n${errors.length} shard(s) errored or timed out — totals below cover the ${results.length} surviving shard(s).`
   );
-});
+}
 
 console.log(`\n=== Aggregate ===`);
 console.log(`  Connected:    ${totals.connected.toLocaleString()} / ${totalTarget.toLocaleString()}`);
