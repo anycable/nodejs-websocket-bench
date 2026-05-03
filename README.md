@@ -73,6 +73,8 @@ About 40 KB per connection in steady state. To exceed a single Linux container's
 
 Pushed all the way, Pro held **999,954 of 1,000,000 idle connections** on the same single Pro-tier instance — peak memory **19.34 GB**, peak CPU **9.37%** (~3 vCPU). 25 test-client shards × 40,000 each. Single process, no Redis or NATS backplane.
 
+For comparison, the same 1M test against single-instance Socket.io (`socket.io` 4.x on Node 22, `--max-old-space-size=30000`, same Railway Pro tier) accepted **119,826** connections and rejected **880,174** during ramp. Memory peak was only 6.3 GB — the bottleneck was throughput, not RAM. The single Node event loop processes WebSocket handshakes serially and can't keep up with ~5,000 attempts/sec coming in across 25 parallel shards. Reaching 1M with Socket.io requires sharding across many Node processes behind a Redis adapter (typical guidance is 10K–30K per process).
+
 ## Why the results are what they are
 
 **Delivery — three protocols, three behaviours.**
