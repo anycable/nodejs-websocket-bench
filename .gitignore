@@ -1,3 +1,5 @@
 node_modules/
 dist/
 *.log
+# Outputs from `npm run bench:idle:multi`
+idle-multi-*.csv

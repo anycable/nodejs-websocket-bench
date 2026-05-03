@@ -19,11 +19,20 @@
 // aren't set, the script skips the chart and only reports aggregate counts.
 
 import { writeFileSync } from "fs";
+import { Agent, setGlobalDispatcher } from "undici";
 
 import type { IdleResult } from "../lib/idle-runner.js";
 import { fetchMetric, readRailwayToken } from "../lib/railway-api.js";
 import { chart } from "../lib/chart.js";
 import { percentile } from "../lib/stats.js";
+
+// Each shard responds only after its full ramp + hold completes — at
+// 50K-per-shard with a 120s hold, that's ~5 minutes per request. Bump
+// the default 5-min fetch headers timeout so the coordinator doesn't
+// give up before the shards finish.
+setGlobalDispatcher(
+  new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
+);
 
 const shardCsv = process.env.SHARDS;
 if (!shardCsv) {

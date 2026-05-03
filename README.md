@@ -57,13 +57,15 @@ CSR with the in-memory adapter doesn't help here — server state is lost on res
 ### Connection capacity — idle WebSockets to anycable-go
 
 | Idle connections | AnyCable memory | AnyCable CPU (of 32 vCPU) |
-| ---------------- | --------------- | ------------------------ |
-| 1,000            | 280 MB          | 0%                       |
-| 10,000           | 280 MB          | 0%                       |
-| 20,000           | 751 MB          | 1.08% (~0.3 vCPU)        |
-| **50,000**       | **1.98 GB**     | **1.08% (~0.3 vCPU)**    |
+| ---------------- | --------------- | ------------------------- |
+| 1,000            | 280 MB          | 0%                        |
+| 10,000           | 280 MB          | 0%                        |
+| 20,000           | 751 MB          | 1.08% (~0.3 vCPU)         |
+| 50,000           | 1.98 GB         | 1.08% (~0.3 vCPU)         |
+| 100,000          | 4.18 GB         | 1.62% (~0.5 vCPU)         |
+| **200,000**      | **8.35 GB**     | **2.63% (~0.8 vCPU)**     |
 
-About 40 KB per connection in steady state. We hit a test-client ceiling at ~56K (the Node bench runner couldn't open more outbound TCP connections from one container) — anycable-go itself didn't break a sweat. Server CPU stayed near zero throughout.
+About 40 KB per connection in steady state. To exceed a single Linux container's ~64K outbound-port limit, the 100K and 200K runs sharded the load across 4 bench-runner containers in parallel — each with its own source IP and ephemeral port pool. anycable-go itself had memory and CPU headroom remaining at 200K.
 
 ## Why the results are what they are
 
