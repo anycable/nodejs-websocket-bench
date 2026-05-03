@@ -49,6 +49,9 @@ const perShardN = parseInt(process.env.PER_SHARD_N || "25000", 10);
 const holdSec = parseInt(process.env.HOLD_SEC || "120", 10);
 const rampPerSec = parseInt(process.env.RAMP_PER_SEC || "200", 10);
 const stream = process.env.STREAM || "idle-probe";
+// Optional override sent to each shard so the bench-runner targets a
+// different anycable-go service (e.g. anycable-go-pro for the Pro variant).
+const cableUrl = process.env.CABLE_URL;
 
 const totalTarget = perShardN * shardUrls.length;
 
@@ -67,6 +70,7 @@ async function runShard(url: string, label: string): Promise<IdleResult> {
     stream,
     shard: label,
   });
+  if (cableUrl) qs.set("cableUrl", cableUrl);
   const res = await fetch(`${url}/bench-idle-anycable?${qs.toString()}`, {
     method: "POST",
   });

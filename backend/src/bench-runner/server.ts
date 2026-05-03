@@ -70,16 +70,20 @@ app.post("/bench-jitter-socketio-csr", async (req, res) => {
 // port limit (~64K), deploy multiple bench-runner instances and POST to
 // each in parallel — each container has its own source IP and ephemeral
 // port pool. See `bench/idle-multi.ts` for the coordinator.
+//
+// `?cableUrl=` overrides the default target so the same bench-runner can
+// hit either anycable-go (OSS) or anycable-go-pro within the same project.
 app.post("/bench-idle-anycable", async (req, res) => {
   const n = parseInt((req.query.n as string) || "10000", 10);
   const holdSec = parseInt((req.query.hold as string) || "60", 10);
   const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
   const stream = (req.query.stream as string) || "idle-probe";
   const shardLabel = (req.query.shard as string) || undefined;
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
 
   const result = await runIdleAnycable(
     { n, holdSec, rampPerSec, stream },
-    ANYCABLE_URL,
+    cableUrl,
     shardLabel
   );
   res.json(result);

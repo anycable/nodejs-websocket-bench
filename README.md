@@ -56,6 +56,8 @@ CSR with the in-memory adapter doesn't help here — server state is lost on res
 
 ### Connection capacity — idle WebSockets to anycable-go
 
+Open-source `anycable/anycable-go:latest`, broker preset on, memory broker, one stream subscription per connection:
+
 | Idle connections | AnyCable memory | AnyCable CPU (of 32 vCPU) |
 | ---------------- | --------------- | ------------------------- |
 | 1,000            | 280 MB          | 0%                        |
@@ -66,6 +68,8 @@ CSR with the in-memory adapter doesn't help here — server state is lost on res
 | **200,000**      | **8.35 GB**     | **2.63% (~0.8 vCPU)**     |
 
 About 40 KB per connection in steady state. To exceed a single Linux container's ~64K outbound-port limit, the 100K and 200K runs sharded the load across 4 bench-runner containers in parallel — each with its own source IP and ephemeral port pool. anycable-go itself had memory and CPU headroom remaining at 200K.
+
+**AnyCable Pro (v1.6.13)** held the same 200,000 connections on **3.56 GB** and **1.94% CPU (~0.6 vCPU)** — about **2.4× more memory-efficient** at the same load (~17.8 KB/connection vs ~42 KB/connection for OSS). Same Railway Pro tier, same broker preset, same protocol; only the binary differs.
 
 ## Why the results are what they are
 
