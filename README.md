@@ -54,26 +54,31 @@ All numbers are from identical Railway infrastructure (same region, same Pro tie
 
 CSR with the in-memory adapter doesn't help here — server state is lost on restart. CSR with Redis Streams keeps state, but the connections themselves are still all severed; the avalanche is architectural.
 
-### Connection capacity — idle WebSockets to anycable-go
+### Connection capacity — idle WebSockets, single-instance, identical Railway hardware
 
-Open-source `anycable/anycable-go:latest`, broker preset on, memory broker, one stream subscription per connection:
+All three setups ran on the same Railway Pro tier (32 vCPU / 32 GB RAM allocated), same broker config where applicable, one stream subscription per connection. The headline test was a 1,000,000-connection idle target across 25 test-client shards × 40,000 each (per-IP outbound-port pool caps any single shard at ~50K, so the load is distributed).
 
-| Idle connections | AnyCable memory | AnyCable CPU (of 32 vCPU) |
-| ---------------- | --------------- | ------------------------- |
-| 1,000            | 280 MB          | 0%                        |
-| 10,000           | 280 MB          | 0%                        |
-| 20,000           | 751 MB          | 1.08% (~0.3 vCPU)         |
-| 50,000           | 1.98 GB         | 1.08% (~0.3 vCPU)         |
-| 100,000          | 4.18 GB         | 1.62% (~0.5 vCPU)         |
-| **200,000**      | **8.35 GB**     | **2.63% (~0.8 vCPU)**     |
+| Server                    | Connections held         | Peak memory | Peak CPU (of 32 vCPU) | What was the limit              |
+| ------------------------- | ------------------------ | ----------- | --------------------- | ------------------------------- |
+| Socket.io 4.x (Node 22)   | 119,826                  | 6.3 GB      | 1.34% (1 core saturated) | single Node event loop          |
+| `anycable-go` (open source)| 993,994                  | **32.00 GB** (ceiling) | 12.22% (~3.9 vCPU)    | 32 GB RAM ceiling of the box    |
+| `anycable-go-pro` v1.6.13 | **999,954**              | 19.34 GB    | 9.37% (~3.0 vCPU)     | nothing — 13 GB memory headroom |
 
-About 40 KB per connection in steady state. To exceed a single Linux container's ~64K outbound-port limit, the 100K and 200K runs sharded the load across 4 bench-runner containers in parallel — each with its own source IP and ephemeral port pool. anycable-go itself had memory and CPU headroom remaining at 200K.
+About **33 KB per connection for OSS, 19 KB for Pro** at 1M scale. AnyCable Pro is roughly 1.7× more memory-efficient than the open-source build at this load (the gap holds across scales: at 200K it's 3.5 GB vs 8.3 GB, ~2.4×). The Pro binary is bundled separately and licensed; the OSS comparison is the apples-to-apples-with-Socket.io baseline.
 
-**AnyCable Pro (v1.6.13)** held the same 200,000 connections on **3.56 GB** and **1.94% CPU (~0.6 vCPU)** — about **2.4× more memory-efficient** at the same load (~17.8 KB/connection vs ~42 KB/connection for OSS). Same Railway Pro tier, same broker preset, same protocol; only the binary differs.
+Reading the table: Socket.io's wall is its architecture (handshakes serialize through one event loop, regardless of memory). OSS's wall is the physical RAM of the box. Pro has both more headroom on memory and the same Go-runtime concurrency advantage as OSS over Node. Reaching 1M with Socket.io requires running many Node processes behind a Redis adapter (typical guidance: 10K–30K per process).
 
-Pushed all the way, Pro held **999,954 of 1,000,000 idle connections** on the same single Pro-tier instance — peak memory **19.34 GB**, peak CPU **9.37%** (~3 vCPU). 25 test-client shards × 40,000 each. Single process, no Redis or NATS backplane.
+Smaller-scale OSS scaling line (same single-instance Pro tier):
 
-For comparison, the same 1M test against single-instance Socket.io (`socket.io` 4.x on Node 22, `--max-old-space-size=30000`, same Railway Pro tier) accepted **119,826** connections and rejected **880,174** during ramp. Memory peak was only 6.3 GB — the bottleneck was throughput, not RAM. The single Node event loop processes WebSocket handshakes serially and can't keep up with ~5,000 attempts/sec coming in across 25 parallel shards. Reaching 1M with Socket.io requires sharding across many Node processes behind a Redis adapter (typical guidance is 10K–30K per process).
+| Idle connections | OSS memory  | OSS CPU (of 32 vCPU) |
+| ---------------- | ----------- | -------------------- |
+| 1,000            | 280 MB      | 0%                   |
+| 10,000           | 280 MB      | 0%                   |
+| 20,000           | 751 MB      | 1.08% (~0.3 vCPU)    |
+| 50,000           | 1.98 GB     | 1.08% (~0.3 vCPU)    |
+| 100,000          | 4.18 GB     | 1.62% (~0.5 vCPU)    |
+| 200,000          | 8.35 GB     | 2.63% (~0.8 vCPU)    |
+| 993,994          | 32.00 GB    | 12.22% (~3.9 vCPU)   |
 
 ## Why the results are what they are
 
