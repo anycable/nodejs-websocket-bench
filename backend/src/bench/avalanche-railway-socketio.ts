@@ -33,7 +33,21 @@ const sockets: Socket[] = [];
 let connected = 0;
 let initialConnectDone = false;
 
-// Phase 1: Connect all clients
+// State written by listeners attached to every socket below. We track
+// these from the moment connections are created so that we don't lose
+// any disconnect / reconnect events firing between the user running
+// `railway restart` and us attaching listeners afterward — Vladimir's
+// note: subscribe to events first, then trigger the disruption.
+let disconnected = 0;
+let firstDisconnectAt = 0;
+let allDisconnectedAt = 0;
+let reconnectedCount = 0;
+let firstReconnectAt = 0;
+let allReconnectedAt = 0;
+const reconnectTimes: number[] = [];
+let restartDetectedAt = 0;
+
+// Phase 1: Connect all clients with all listeners pre-attached.
 for (let i = 0; i < numClients; i++) {
   const socket = io(url, {
     transports: ["websocket"],
@@ -47,6 +61,37 @@ for (let i = 0; i < numClients; i++) {
     if (!initialConnectDone) {
       connected++;
       socket.emit("join", stream);
+      return;
+    }
+    // After the initial ramp completes, any `connect` we see is a
+    // reconnect after the restart.
+    if (restartDetectedAt > 0) {
+      reconnectedCount++;
+      const now = Date.now();
+      reconnectTimes.push(now - restartDetectedAt);
+      if (reconnectedCount === 1) {
+        firstReconnectAt = now;
+        console.log(`  First reconnect at ${new Date().toISOString()}`);
+      }
+      if (reconnectedCount >= connected * 0.95 && !allReconnectedAt) {
+        allReconnectedAt = now;
+        console.log(`  95% reconnected (${reconnectedCount}/${connected}) in ${now - restartDetectedAt}ms`);
+      }
+    }
+  });
+
+  socket.on("disconnect", () => {
+    if (!initialConnectDone) return; // ignore noise from the ramp
+    disconnected++;
+    const now = Date.now();
+    if (disconnected === 1) {
+      firstDisconnectAt = now;
+      restartDetectedAt = now;
+      console.log(`  First disconnect detected at ${new Date().toISOString()}`);
+    }
+    if (disconnected === connected) {
+      allDisconnectedAt = now;
+      console.log(`  All ${connected} clients disconnected (${now - firstDisconnectAt}ms spread)`);
     }
   });
 
@@ -62,50 +107,12 @@ await new Promise((r) => setTimeout(r, 5000));
 initialConnectDone = true;
 console.log(`\nAll clients connected: ${connected}/${numClients}`);
 
-// Phase 2: Wait for restart (triggered externally)
+// Phase 2: prompt the user to trigger the restart. By the time the
+// console message is rendered, every socket already has its disconnect
+// + reconnect listeners attached, so no events can be missed in the
+// gap between the trigger landing and the listeners arming.
 console.log(`\n>>> NOW RUN IN ANOTHER TERMINAL: railway restart -s socketio-server --yes <<<`);
 console.log(`Waiting for disconnects...\n`);
-
-let disconnected = 0;
-let firstDisconnectAt = 0;
-let allDisconnectedAt = 0;
-let reconnectedCount = 0;
-let firstReconnectAt = 0;
-let allReconnectedAt = 0;
-const reconnectTimes: number[] = [];
-let restartDetectedAt = 0;
-
-sockets.forEach((socket) => {
-  socket.on("disconnect", () => {
-    disconnected++;
-    const now = Date.now();
-    if (disconnected === 1) {
-      firstDisconnectAt = now;
-      restartDetectedAt = now;
-      console.log(`  First disconnect detected at ${new Date().toISOString()}`);
-    }
-    if (disconnected === connected) {
-      allDisconnectedAt = now;
-      console.log(`  All ${connected} clients disconnected (${now - firstDisconnectAt}ms spread)`);
-    }
-  });
-
-  socket.on("connect", () => {
-    if (restartDetectedAt > 0) {
-      reconnectedCount++;
-      const now = Date.now();
-      reconnectTimes.push(now - restartDetectedAt);
-      if (reconnectedCount === 1) {
-        firstReconnectAt = now;
-        console.log(`  First reconnect at ${new Date().toISOString()}`);
-      }
-      if (reconnectedCount >= connected * 0.95 && !allReconnectedAt) {
-        allReconnectedAt = now;
-        console.log(`  95% reconnected (${reconnectedCount}/${connected}) in ${now - restartDetectedAt}ms`);
-      }
-    }
-  });
-});
 
 // Wait up to 3 minutes for the full cycle
 const deadline = Date.now() + 180000;

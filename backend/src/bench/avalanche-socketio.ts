@@ -45,6 +45,17 @@ let disconnected = 0;
 let reconnected = 0;
 const reconnectTimes: number[] = [];
 
+// Disconnect / reconnect tracking is set up here, BEFORE we kill the
+// server, so events that fire in the few milliseconds between the
+// SIGKILL landing and us being ready to listen don't get lost.
+// killTime / restartTime are written below when those phases happen.
+let killTime = 0;
+let firstDisconnectAt = 0;
+let allDisconnectedAt = 0;
+let restartTime = 0;
+let firstReconnectAt = 0;
+let allReconnectedAt = 0;
+
 for (let i = 0; i < numClients; i++) {
   const socket = io(`http://localhost:${port}`, {
     transports: ["websocket"],
@@ -54,10 +65,28 @@ for (let i = 0; i < numClients; i++) {
   });
 
   socket.on("connect", () => {
-    if (connected < numClients) {
+    if (restartTime > 0) {
+      // This is a reconnect after the server came back up.
+      reconnected++;
+      const now = Date.now();
+      reconnectTimes.push(now - restartTime);
+      if (reconnected === 1) firstReconnectAt = now;
+      if (reconnected >= connected * 0.95 && !allReconnectedAt) {
+        allReconnectedAt = now;
+      }
+    } else if (connected < numClients) {
+      // Initial connect during ramp-up.
       connected++;
       socket.emit("join", stream);
     }
+  });
+
+  socket.on("disconnect", () => {
+    if (killTime === 0) return; // ignore disconnects unrelated to the kill
+    disconnected++;
+    const now = Date.now();
+    if (disconnected === 1) firstDisconnectAt = now;
+    if (disconnected === connected) allDisconnectedAt = now;
   });
 
   sockets.push(socket);
@@ -89,23 +118,11 @@ const publishInterval = setInterval(async () => {
 await new Promise((r) => setTimeout(r, 5000));
 console.log(`Published ${publishSeq} messages before kill`);
 
-// Phase 3: Kill the server — simulate a deploy
-const killTime = Date.now();
+// Phase 3: Kill the server — simulate a deploy. All disconnect/reconnect
+// listeners were attached in Phase 1; setting killTime here arms them.
+killTime = Date.now();
 console.log("\n>>> KILLING SERVER <<<");
 server.kill("SIGKILL");
-
-// Track disconnects
-let firstDisconnectAt = 0;
-let allDisconnectedAt = 0;
-disconnected = 0;
-
-sockets.forEach((socket, i) => {
-  socket.on("disconnect", () => {
-    disconnected++;
-    if (disconnected === 1) firstDisconnectAt = Date.now();
-    if (disconnected === connected) allDisconnectedAt = Date.now();
-  });
-});
 
 // Wait for all clients to detect disconnect
 await new Promise<void>((resolve) => {
@@ -121,31 +138,15 @@ const disconnectDetectionTime = allDisconnectedAt ? allDisconnectedAt - killTime
 console.log(`\nDisconnects detected: ${disconnected}/${connected}`);
 console.log(`Time to detect: ${disconnectDetectionTime}ms`);
 
-// Phase 4: Restart the server — measure reconnection avalanche
+// Phase 4: Restart the server — reconnect listeners (set up in Phase 1)
+// will start firing as clients re-establish.
 console.log("\n>>> RESTARTING SERVER <<<");
-const restartTime = Date.now();
+restartTime = Date.now();
 await startServer();
 console.log("Server back up");
 
-// Stop old publisher, start new one
+// Stop publisher
 clearInterval(publishInterval);
-
-// Track reconnections
-reconnected = 0;
-let firstReconnectAt = 0;
-let allReconnectedAt = 0;
-
-sockets.forEach((socket) => {
-  socket.on("connect", () => {
-    reconnected++;
-    const now = Date.now();
-    reconnectTimes.push(now - restartTime);
-    if (reconnected === 1) firstReconnectAt = now;
-    if (reconnected >= connected * 0.95) {
-      if (!allReconnectedAt) allReconnectedAt = now;
-    }
-  });
-});
 
 // Wait for reconnections (up to 2 minutes)
 await new Promise<void>((resolve) => {

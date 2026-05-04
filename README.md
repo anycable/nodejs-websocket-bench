@@ -56,6 +56,11 @@ CSR with the in-memory adapter doesn't help here — server state is lost on res
 
 ### Connection capacity — idle WebSockets, single-instance, identical Railway hardware
 
+![Railway services for the benchmark — anycable-go (OSS), anycable-go-pro, socketio-server, publisher, plus 50 sharded bench-runners](docs/railway-services.png)
+*The bench-runners are deployed across 50 separate Railway containers so that each shard has its own source IP and ~64K outbound-port pool. The 1M-connection idle test fans out to all 50 in parallel; the per-IP port limit is what makes single-machine 1M tests hard, and this is how we work around it without kernel tuning.*
+
+
+
 All three setups ran on the same Railway Pro tier (32 vCPU / 32 GB RAM allocated), same broker config where applicable, one stream subscription per connection. The headline test was a 1,000,000-connection idle target across 25 test-client shards × 40,000 each (per-IP outbound-port pool caps any single shard at ~50K, so the load is distributed).
 
 | Server                    | Connections held         | Peak memory | Peak CPU (of 32 vCPU) | What was the limit              |

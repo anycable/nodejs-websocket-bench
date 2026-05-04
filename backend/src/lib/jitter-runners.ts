@@ -101,6 +101,31 @@ function terminateUnderlyingTcp(socket: Socket) {
   return false;
 }
 
+// Force-close the underlying TCP socket of an @anycable/core cable.
+// `cable.transport` is a Transport interface (close()/open() etc), but
+// the WebSocketTransport implementation exposes `.ws` — the actual
+// `ws` WebSocket — and we use `.terminate()` on it for the same kind
+// of unclean-close semantics we use against socket.io-client. After
+// terminate, the cable's Monitor sees the socket close and reconnects
+// with backoff, mirroring socket.io-client's retry path. This makes
+// the AnyCable jitter test apples-to-apples with the Socket.io one.
+function terminateCableWs(cable: ReturnType<typeof createCable>): boolean {
+  const transport = (cable as unknown as { transport?: unknown }).transport as
+    | { ws?: WebSocket & { terminate?: () => void; close?: () => void } }
+    | undefined;
+  const raw = transport?.ws;
+  if (!raw) return false;
+  if (typeof raw.terminate === "function") {
+    raw.terminate();
+    return true;
+  }
+  if (typeof raw.close === "function") {
+    raw.close();
+    return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // AnyCable jitter
 
@@ -161,12 +186,16 @@ export async function runJitterAnycable(
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
           stat.jitterCount++;
-          cable.disconnect();
+          // Force-close the underlying TCP socket — same semantics as
+          // the Socket.io test (raw.terminate()). The cable's Monitor
+          // detects the close and reconnects with its built-in backoff,
+          // mirroring socket.io-client's retry path. Don't call
+          // cable.connect() manually — let the reconnect machinery run.
+          terminateCableWs(cable);
+          // Hold the "offline" window. Reconnect attempts may fire
+          // during or after this window — that's the system under test.
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
-          cable.connect();
-          // Spread reconnect storms so 1000s of clients don't slam the server.
-          await new Promise((r) => setTimeout(r, 2000 + Math.random() * 1000));
-          next = Date.now() + (p.jitterIntervalSec + Math.random() * 10) * 1000;
+          next = Date.now() + (p.jitterIntervalSec + Math.random() * 5) * 1000;
         }
         await new Promise((r) => setTimeout(r, 500));
       }
