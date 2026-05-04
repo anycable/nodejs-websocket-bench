@@ -1,5 +1,17 @@
 node_modules/
 dist/
 *.log
+
 # Outputs from `npm run bench:idle:multi`
 idle-multi-*.csv
+
+# AnyCable Pro binaries are licensed and MUST NEVER be committed to this
+# public repo. These patterns match the asset names from the private
+# anycable/anycable-go-pro-releases repo. The Pro deployment lives in
+# its own directory outside this repo; if a binary ever ends up here by
+# accident, git will refuse to track it.
+anycable-go-linux-*
+anycable-go-darwin-*
+anycable-go-windows-*
+anycable-go-mrb-*
+anycable-thruster-*
