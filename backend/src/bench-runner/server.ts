@@ -21,7 +21,9 @@ import {
   runJitterSocketio,
   runJitterSocketioCsr,
 } from "../lib/jitter-runners.js";
+import { runJitterAnycableTraced } from "../lib/jitter-anycable-traced.js";
 import { runIdleAnycable, runIdleSocketio } from "../lib/idle-runner.js";
+import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
 
 const SOCKETIO_URL =
   process.env.SOCKETIO_URL || "http://socketio-server.railway.internal:3000";
@@ -55,6 +57,28 @@ app.post("/bench-jitter-anycable", async (req, res) => {
     broadcastUrl,
     broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
   });
+  res.json(result);
+});
+
+// Diagnostic-only: same disruption as /bench-jitter-anycable plus
+// per-cable timeline tracing. Returns the same JitterResult shape
+// (so callers stay compatible) with an extra `trace` field — for
+// us to read offline. Sample size defaults to 100 to keep the
+// payload small at 10K+ scale; override with ?traceSample=N.
+app.post("/bench-jitter-anycable-traced", async (req, res) => {
+  const params = paramsFromQuery(req);
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+  const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
+  const traceSample = parseInt((req.query.traceSample as string) || "100", 10);
+  const result = await runJitterAnycableTraced(
+    params,
+    {
+      cableUrl,
+      broadcastUrl,
+      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+    },
+    { traceSample }
+  );
   res.json(result);
 });
 
@@ -112,6 +136,30 @@ app.post("/bench-idle-socketio", async (req, res) => {
     { n, holdSec, rampPerSec, stream },
     serverUrl,
     shardLabel
+  );
+  res.json(result);
+});
+
+// Avalanche probe — connect N socket.io-client sockets, wait for an
+// externally-triggered server restart (caller fires `railway restart`
+// during the prearm window), measure the recovery cycle. Returns once
+// 95% are back or the recovery deadline passes.
+//
+// `?serverUrl=` overrides the default Socket.io target.
+app.post("/bench-avalanche-socketio", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "1000", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const prearmSec = parseInt((req.query.prearm as string) || "60", 10);
+  const recoveryWaitSec = parseInt(
+    (req.query.recoveryWait as string) || "180",
+    10
+  );
+  const stream = (req.query.stream as string) || "avalanche";
+  const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
+
+  const result = await runAvalancheSocketio(
+    { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+    serverUrl
   );
   res.json(result);
 });

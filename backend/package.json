@@ -12,10 +12,12 @@
     "bench:jitter:socketio": "tsx src/bench/jitter-socketio.ts",
     "bench:jitter:socketio-csr": "tsx src/bench/jitter-socketio-csr.ts",
     "bench:jitter:anycable": "tsx src/bench/jitter-anycable.ts",
+    "bench:jitter:anycable:trace": "tsx src/bench/jitter-anycable-trace.ts",
     "bench:avalanche:socketio": "tsx src/bench/avalanche-socketio.ts",
     "bench:avalanche:railway": "tsx src/bench/avalanche-railway-socketio.ts",
     "bench:avalanche:anycable": "tsx src/bench/avalanche-anycable.ts",
     "bench:idle:multi": "tsx src/bench/idle-multi.ts",
+    "bench:avalanche:multi": "tsx src/bench/avalanche-multi.ts",
     "bench:metrics": "tsx src/bench/railway-metrics.ts",
     "publish": "tsx src/publisher.ts"
   },
