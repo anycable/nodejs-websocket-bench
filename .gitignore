@@ -5,6 +5,12 @@ dist/
 # Outputs from `npm run bench:idle:multi`
 idle-multi-*.csv
 
+# Outputs from `npm run bench:avalanche:multi`
+avalanche-multi-*.csv
+
+# Outputs from `npm run bench:jitter:anycable:trace`
+jitter-trace-*.json
+
 # AnyCable Pro binaries are licensed and MUST NEVER be committed to this
 # public repo. These patterns match the asset names from the private
 # anycable/anycable-go-pro-releases repo. The Pro deployment lives in
