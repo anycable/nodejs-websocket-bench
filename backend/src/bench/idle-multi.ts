@@ -54,14 +54,17 @@ const stream = process.env.STREAM || "idle-probe";
 const cableUrl = process.env.CABLE_URL;
 
 // TARGET=socketio switches the test to /bench-idle-socketio (Node-based
-// Socket.io). Defaults to anycable for backwards compatibility.
+// Socket.io). TARGET=uws targets /bench-idle-uws (uWebSockets.js).
+// Defaults to anycable for backwards compatibility.
 const target = (process.env.TARGET || "anycable").toLowerCase();
-if (target !== "anycable" && target !== "socketio") {
-  console.error(`TARGET must be "anycable" or "socketio" (got "${target}")`);
+if (target !== "anycable" && target !== "socketio" && target !== "uws") {
+  console.error(`TARGET must be "anycable", "socketio", or "uws" (got "${target}")`);
   process.exit(1);
 }
 // SERVER_URL overrides the Socket.io target (TARGET=socketio variant).
 const socketioServerUrl = process.env.SERVER_URL;
+// UWS_WS_URL overrides the uWS target (TARGET=uws variant).
+const uwsWsUrl = process.env.UWS_WS_URL;
 
 const totalTarget = perShardN * shardUrls.length;
 
@@ -86,7 +89,13 @@ async function runShard(url: string, label: string): Promise<IdleResult> {
   });
   if (target === "anycable" && cableUrl) qs.set("cableUrl", cableUrl);
   if (target === "socketio" && socketioServerUrl) qs.set("serverUrl", socketioServerUrl);
-  const endpoint = target === "socketio" ? "bench-idle-socketio" : "bench-idle-anycable";
+  if (target === "uws" && uwsWsUrl) qs.set("wsUrl", uwsWsUrl);
+  const endpoint =
+    target === "socketio"
+      ? "bench-idle-socketio"
+      : target === "uws"
+        ? "bench-idle-uws"
+        : "bench-idle-anycable";
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), SHARD_TIMEOUT_MS);

@@ -13,6 +13,94 @@
 import WebSocket from "ws";
 import { io as ioClient, Socket } from "socket.io-client";
 
+// uWS idle: opens raw `ws` WebSocket against the uws-server's /ws path
+// (no subprotocol — uWS's App.ws() doesn't negotiate protocols), sends
+// the {type:"subscribe"} frame on open, holds, tears down. Same shape
+// as the AnyCable / socket.io variants so the multi-shard coordinator
+// works without changes.
+export async function runIdleUws(
+  p: IdleParams,
+  serverWsUrl: string,
+  shardLabel?: string
+): Promise<IdleResult> {
+  const tag = shardLabel ? `[idle-uws:${shardLabel}]` : "[idle-uws]";
+  console.log(
+    `${tag} target=${serverWsUrl} n=${p.n} ramp=${p.rampPerSec}/s hold=${p.holdSec}s`
+  );
+
+  const result = { connected: 0, welcomed: 0, subscribed: 0, failed: 0 };
+  const sockets: WebSocket[] = [];
+  const startedAt = Date.now();
+
+  for (let i = 0; i < p.n; i++) {
+    const ws = new WebSocket(serverWsUrl);
+    sockets.push(ws);
+
+    let opened = false;
+    ws.once("open", () => {
+      opened = true;
+      result.connected++;
+      // No welcome frame from uWS — we count welcomed alongside connected
+      // so the field has the same semantic as the socket.io variant.
+      result.welcomed++;
+      try {
+        ws.send(JSON.stringify({ type: "subscribe", topic: p.stream }));
+        // uWS doesn't ack subscriptions — count "subscribed" as soon as
+        // the frame is on the wire, mirroring socket.io's join semantic.
+        result.subscribed++;
+      } catch {
+        /* socket may have closed mid-handshake; not interesting here */
+      }
+    });
+    ws.once("error", () => {
+      if (!opened) result.failed++;
+    });
+
+    if ((i + 1) % p.rampPerSec === 0) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if ((i + 1) % 1000 === 0) {
+        console.log(
+          `${tag} ramped ${i + 1}/${p.n}  connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
+        );
+      }
+    }
+  }
+
+  await new Promise((r) => setTimeout(r, 5000));
+  const rampElapsedMs = Date.now() - startedAt;
+  console.log(
+    `${tag} all ramped (${rampElapsedMs}ms): connected=${result.connected}/${p.n} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
+  );
+
+  console.log(`${tag} holding ${p.holdSec}s...`);
+  const holdStartedAt = Date.now();
+  await new Promise((r) => setTimeout(r, p.holdSec * 1000));
+  const holdElapsedMs = Date.now() - holdStartedAt;
+
+  console.log(
+    `${tag} hold complete: connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
+  );
+
+  for (let i = 0; i < sockets.length; i += 500) {
+    for (const s of sockets.slice(i, i + 500)) {
+      try {
+        s.close();
+      } catch {
+        /* ignore tear-down errors */
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  return {
+    ...result,
+    rampElapsedMs,
+    holdElapsedMs,
+    totalElapsedMs: Date.now() - startedAt,
+    shardLabel,
+  };
+}
+
 export interface IdleParams {
   n: number;
   holdSec: number;

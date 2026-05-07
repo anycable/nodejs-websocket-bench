@@ -22,8 +22,10 @@ import {
   runJitterSocketioCsr,
 } from "../lib/jitter-runners.js";
 import { runJitterAnycableTraced } from "../lib/jitter-anycable-traced.js";
-import { runIdleAnycable, runIdleSocketio } from "../lib/idle-runner.js";
+import { runIdleAnycable, runIdleSocketio, runIdleUws } from "../lib/idle-runner.js";
 import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
+import { runJitterUws } from "../lib/jitter-uws.js";
+import { runAvalancheUws } from "../lib/avalanche-uws.js";
 
 const SOCKETIO_URL =
   process.env.SOCKETIO_URL || "http://socketio-server.railway.internal:3000";
@@ -33,6 +35,10 @@ const ANYCABLE_BROADCAST_URL =
   process.env.ANYCABLE_BROADCAST_URL ||
   "http://anycable-go.railway.internal:8080/_broadcast";
 const ANYCABLE_BROADCAST_SECRET = process.env.ANYCABLE_BROADCAST_SECRET || "";
+const UWS_WS_URL =
+  process.env.UWS_WS_URL || "ws://uws-server.railway.internal:3000/ws";
+const UWS_HTTP_URL =
+  process.env.UWS_HTTP_URL || "http://uws-server.railway.internal:3000";
 
 const app = express();
 app.use(express.json());
@@ -94,6 +100,20 @@ app.post("/bench-jitter-socketio-csr", async (req, res) => {
   res.json(result);
 });
 
+// uWebSockets.js jitter — `?wsUrl=` and `?httpUrl=` override defaults so
+// the same bench-runner can target uws-server, uws-server-small, or any
+// other uWS deployment over Railway's internal network.
+app.post("/bench-jitter-uws", async (req, res) => {
+  const params = paramsFromQuery(req);
+  const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
+  const httpUrl = (req.query.httpUrl as string) || UWS_HTTP_URL;
+  const result = await runJitterUws(params, {
+    serverWsUrl: wsUrl,
+    serverHttpUrl: httpUrl,
+  });
+  res.json(result);
+});
+
 // Synchronous idle-connection probe. To exceed the per-container outbound
 // port limit (~64K), deploy multiple bench-runner instances and POST to
 // each in parallel — each container has its own source IP and ephemeral
@@ -140,6 +160,24 @@ app.post("/bench-idle-socketio", async (req, res) => {
   res.json(result);
 });
 
+// uWebSockets.js idle probe — same shape as the anycable/socketio
+// variants. `?wsUrl=` overrides the default target.
+app.post("/bench-idle-uws", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "10000", 10);
+  const holdSec = parseInt((req.query.hold as string) || "60", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const stream = (req.query.stream as string) || "idle-probe";
+  const shardLabel = (req.query.shard as string) || undefined;
+  const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
+
+  const result = await runIdleUws(
+    { n, holdSec, rampPerSec, stream },
+    wsUrl,
+    shardLabel
+  );
+  res.json(result);
+});
+
 // Avalanche probe — connect N socket.io-client sockets, wait for an
 // externally-triggered server restart (caller fires `railway restart`
 // during the prearm window), measure the recovery cycle. Returns once
@@ -164,10 +202,33 @@ app.post("/bench-avalanche-socketio", async (req, res) => {
   res.json(result);
 });
 
+// uWebSockets.js avalanche — same shape and methodology as the Socket.io
+// avalanche, just pointed at the uws-server. Operator triggers redeploy
+// during the prearm window: `railway redeploy -s uws-server --yes`.
+app.post("/bench-avalanche-uws", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "1000", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const prearmSec = parseInt((req.query.prearm as string) || "120", 10);
+  const recoveryWaitSec = parseInt(
+    (req.query.recoveryWait as string) || "180",
+    10
+  );
+  const stream = (req.query.stream as string) || "avalanche-uws";
+  const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
+
+  const result = await runAvalancheUws(
+    { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+    wsUrl
+  );
+  res.json(result);
+});
+
 const port = parseInt(process.env.PORT || "3001", 10);
 app.listen(port, () => {
   console.log(`bench-runner listening on :${port}`);
   console.log(`  socketio target:    ${SOCKETIO_URL}`);
   console.log(`  anycable target:    ${ANYCABLE_URL}`);
   console.log(`  anycable broadcast: ${ANYCABLE_BROADCAST_URL}`);
+  console.log(`  uws ws target:      ${UWS_WS_URL}`);
+  console.log(`  uws http target:    ${UWS_HTTP_URL}`);
 });

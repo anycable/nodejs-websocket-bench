@@ -276,7 +276,7 @@ railway restart -s socketio-server --yes
 
 ## Connection-capacity test
 
-The bench-runner exposes a synchronous probe — `POST /bench-idle-anycable` — that opens N raw WebSocket connections to anycable-go (via internal network), waits for `welcome` and `confirm_subscription` on each, holds for `holdSec`, and returns final counts.
+The bench-runner exposes a synchronous probe — `POST /bench-idle-anycable` (and `/bench-idle-socketio`, `/bench-idle-uws`) — that opens N raw WebSocket connections to the target via internal network, holds for `holdSec`, and returns final counts.
 
 ### Single-shard (up to ~50K)
 
@@ -287,24 +287,119 @@ curl --max-time 600 -X POST \
 
 Each Linux container has a per-source-IP outbound port pool of ~64K, which caps any single shard at ~50K useful connections.
 
-### Multi-shard (100K+)
+### Multi-shard (100K – 1M)
 
 To go beyond one container's port pool, deploy multiple bench-runner instances and fan out from a coordinator. Each shard runs in its own Railway container with its own source IP and ephemeral port range, so they don't compete.
 
-1. Deploy 4 copies of the bench-runner service (e.g., `bench-runner-1` … `bench-runner-4`), each with `SERVICE_ENTRY=bench-runner/server` and a public domain.
-2. Coordinate from a developer machine:
+The 1M-headline test in this repo uses **50 sharded bench-runners** (`bench-runner` + `bench-runner-2` through `bench-runner-49` + `bench-runner-50`), each handling ~20K connections. See [Infrastructure recipes](#infrastructure-recipes) below for how to deploy and tear down at this scale without a UI loop.
 
 ```bash
-SHARDS="https://bench-runner-1.up.railway.app,https://bench-runner-2.up.railway.app,https://bench-runner-3.up.railway.app,https://bench-runner-4.up.railway.app" \
-  PER_SHARD_N=25000 HOLD_SEC=120 RAMP_PER_SEC=200 \
+# Build the SHARDS env var (50 shards):
+SHARDS=$(printf 'https://bench-runner-production.up.railway.app'
+         for i in $(seq 2 50); do
+           printf ',https://bench-runner-%s-production.up.railway.app' "$i"
+         done)
+
+# Run 1M idle against anycable-go on a 32 vCPU / 32 GB box:
+SHARDS="$SHARDS" \
+  PER_SHARD_N=20000 HOLD_SEC=120 RAMP_PER_SEC=200 \
   PROJECT_ID=<railway-project-uuid> SERVICE_ID=<anycable-go-service-uuid> \
   SERVICE_NAME=anycable-go \
   npm run bench:idle:multi
 ```
 
-This fans out 4 × 25,000 = 100,000 connections to one anycable-go instance, then queries Railway metrics over the test window and prints ASCII charts of memory + CPU plus a CSV time-series for offline plotting.
+Other targets are selected with `TARGET=`:
 
-`PROJECT_ID` and `SERVICE_ID` are optional — without them the script reports aggregate counts only.
+```bash
+# Socket.io: TARGET=socketio + SERVER_URL=
+TARGET=socketio SERVER_URL=http://socketio-server.railway.internal:3000 \
+  SHARDS="$SHARDS" PER_SHARD_N=20000 ... npm run bench:idle:multi
+
+# uWebSockets.js: TARGET=uws + UWS_WS_URL=
+TARGET=uws UWS_WS_URL=ws://uws-server.railway.internal:3000/ws \
+  SHARDS="$SHARDS" PER_SHARD_N=20000 ... npm run bench:idle:multi
+```
+
+`PROJECT_ID` and `SERVICE_ID` are optional — without them the script reports aggregate counts only (no Railway metrics chart or CSV).
+
+
+## Infrastructure recipes
+
+Reproducing the 1M / avalanche / large-scale tests means provisioning Railway services in bulk and tearing them down again. These commands let you do it from the shell without clicking through the Railway UI.
+
+All commands assume `railway login` has been run and `RAILWAY_TOKEN` is exported (`export RAILWAY_TOKEN=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.railway/config.json')))['user']['token'])")`).
+
+### Find your project + environment + service IDs
+
+```bash
+railway status --json | jq '.environments.edges[0].node | {envId: .id, services: .serviceInstances.edges | map({name: .node.serviceName, id: .node.serviceId})}'
+```
+
+### Resize a service (vCPU + memory)
+
+The CLI doesn't expose this; the GraphQL mutation does. Used here to size each test target the same as the comparison page (32 vCPU / 32 GB for the 1M idle box, 0.5 GB / 1 vCPU for the avalanche cliff box).
+
+```bash
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"mutation Set($input: ServiceInstanceLimitsUpdateInput!) { serviceInstanceLimitsUpdate(input: $input) }",
+       "variables":{"input":{"serviceId":"<svc-uuid>","environmentId":"<env-uuid>","memoryGB":32,"vCPUs":32}}}'
+```
+
+Limits apply on the next deployment. Trigger a redeploy with the same image (no rebuild):
+
+```bash
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"mutation R($id: String!, $env: String!) { serviceInstanceRedeploy(serviceId: $id, environmentId: $env) }",
+       "variables":{"id":"<svc-uuid>","env":"<env-uuid>"}}'
+```
+
+### Trigger an avalanche restart from a script
+
+The avalanche tests need an externally-triggered server restart during the test's `prearm` window. The bench-runner's avalanche probe waits for the first disconnect; we trigger it via the same `serviceInstanceRedeploy` mutation against the target server. The `bench/avalanche-railway-*.ts` scripts print the exact `railway redeploy -s <svc> --yes` command — or use the GraphQL form above for fully scripted runs.
+
+Note: Railway's redeploy is zero-downtime (build new → swap → drain old). For avalanche tests the swap is what creates the disruption, so expect a 30–90 s lag between firing the mutation and disconnects landing on the bench-runner.
+
+### Deploy code to all 50 shards in parallel
+
+Each shard is its own Railway service running the same image. To push new bench-runner code to all of them at once:
+
+```bash
+cd benchmark
+for i in $(seq 2 50); do
+  railway up --service "bench-runner-$i" --ci --detach 2>&1 | tail -1 &
+done
+wait
+```
+
+The first deploy populates Docker layer cache; subsequent shards complete much faster. Use `railway status --json` to confirm all reached `SUCCESS` before running the multi-shard test.
+
+### Pause / downsize after tests (cost control)
+
+Railway bills per-minute for allocated RAM and vCPU. After a test session, downsize or pause the test-only services so you're not paying for idle high-RAM allocations. Pausing keeps the service definition but stops the container (and the billing).
+
+Downsize via `serviceInstanceLimitsUpdate` (set `memoryGB` and `vCPUs` to small values):
+
+```bash
+# Downsize uws-server from 32×32 to 0.5×1
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"mutation Set($input: ServiceInstanceLimitsUpdateInput!) { serviceInstanceLimitsUpdate(input: $input) }",
+       "variables":{"input":{"serviceId":"<svc-uuid>","environmentId":"<env-uuid>","memoryGB":0.5,"vCPUs":1}}}'
+```
+
+Or stop a service entirely:
+
+```bash
+# Stop a deployed container without deleting the service
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"mutation S($id: String!) { deploymentStop(id: $id) }",
+       "variables":{"id":"<latest-deployment-id>"}}'
+```
+
+For the bench-runner shards specifically: they're ~64 MB each at idle, so 50 of them is only ~3 GB total — the bigger savings come from the high-RAM target services (`uws-server`, `anycable-go`, `socketio-server` if they're sized 32×32 from a 1M run).
 
 ## Environment variables
 
