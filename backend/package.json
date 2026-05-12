@@ -21,6 +21,10 @@
     "bench:avalanche:uws": "tsx src/bench/avalanche-railway-uws.ts",
     "bench:idle:multi": "tsx src/bench/idle-multi.ts",
     "bench:avalanche:multi": "tsx src/bench/avalanche-multi.ts",
+    "bench:throughput:socketio": "tsx src/bench/throughput-socketio.ts",
+    "bench:throughput:socketio-csr": "tsx src/bench/throughput-socketio-csr.ts",
+    "bench:throughput:anycable": "tsx src/bench/throughput-anycable.ts",
+    "bench:throughput:uws": "tsx src/bench/throughput-uws.ts",
     "bench:metrics": "tsx src/bench/railway-metrics.ts",
     "publish": "tsx src/publisher.ts"
   },

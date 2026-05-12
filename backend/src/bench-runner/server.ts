@@ -26,6 +26,13 @@ import { runIdleAnycable, runIdleSocketio, runIdleUws } from "../lib/idle-runner
 import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
 import { runJitterUws } from "../lib/jitter-uws.js";
 import { runAvalancheUws } from "../lib/avalanche-uws.js";
+import {
+  runThroughputAnycable,
+  runThroughputSocketio,
+  runThroughputSocketioCsr,
+  runThroughputUws,
+  type ThroughputParams,
+} from "../lib/throughput.js";
 
 const SOCKETIO_URL =
   process.env.SOCKETIO_URL || "http://socketio-server.railway.internal:3000";
@@ -220,6 +227,58 @@ app.post("/bench-avalanche-uws", async (req, res) => {
     { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
     wsUrl
   );
+  res.json(result);
+});
+
+// ---------------------------------------------------------------------------
+// Throughput (msg/sec) benches. 10K subscribers × N broadcasts at intervalMs.
+// Sweep the rate from a CLI driver: 1, 10, 100, 1000 msg/sec target. Where
+// each setup breaks (delivery drops, latency tail blows out) is the headline.
+function throughputParamsFromQuery(req: express.Request, defaultStream: string): ThroughputParams {
+  return {
+    n: parseInt((req.query.n as string) || "10000", 10),
+    totalMessages: parseInt((req.query.total as string) || "100", 10),
+    intervalMs: parseInt((req.query.intervalMs as string) || "100", 10),
+    rampPerSec: parseInt((req.query.ramp as string) || "200", 10),
+    stream: (req.query.stream as string) || defaultStream,
+    drainSec: parseInt((req.query.drain as string) || "30", 10),
+  };
+}
+
+app.post("/bench-throughput-anycable", async (req, res) => {
+  const params = throughputParamsFromQuery(req, `tp-ac-${Date.now()}`);
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+  const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
+  const result = await runThroughputAnycable(params, {
+    cableUrl,
+    broadcastUrl,
+    broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+  });
+  res.json(result);
+});
+
+app.post("/bench-throughput-socketio", async (req, res) => {
+  const params = throughputParamsFromQuery(req, `tp-sio-${Date.now()}`);
+  const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
+  const result = await runThroughputSocketio(params, { serverUrl });
+  res.json(result);
+});
+
+app.post("/bench-throughput-socketio-csr", async (req, res) => {
+  const params = throughputParamsFromQuery(req, `tp-csr-${Date.now()}`);
+  const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
+  const result = await runThroughputSocketioCsr(params, { serverUrl });
+  res.json(result);
+});
+
+app.post("/bench-throughput-uws", async (req, res) => {
+  const params = throughputParamsFromQuery(req, `tp-uws-${Date.now()}`);
+  const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
+  const httpUrl = (req.query.httpUrl as string) || UWS_HTTP_URL;
+  const result = await runThroughputUws(params, {
+    serverWsUrl: wsUrl,
+    serverHttpUrl: httpUrl,
+  });
   res.json(result);
 });
 
