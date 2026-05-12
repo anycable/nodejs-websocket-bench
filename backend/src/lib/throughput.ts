@@ -24,12 +24,13 @@
 //     anycable-go, which then fans out.
 
 import WebSocket from "ws";
+import { connect as natsConnect, StringCodec, NatsConnection } from "nats";
 import { createCable } from "@anycable/core";
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
 
-export type PublisherMode = "serial" | "pool" | "fireforget";
+export type PublisherMode = "serial" | "pool" | "fireforget" | "nats";
 
 export interface ThroughputParams {
   n: number;             // subscribers
@@ -38,10 +39,11 @@ export interface ThroughputParams {
   rampPerSec: number;
   stream: string;
   drainSec: number;      // extra wait after publish completes to catch the tail
-  // AnyCable-only: how to drive the HTTP /_broadcast loop.
-  //   serial     — await each call (default; baseline, but call-rate-bound)
-  //   pool       — keep publisherConcurrency in flight; bounded parallelism
-  //   fireforget — dispatch without awaiting, sleep intervalMs between
+  // AnyCable-only: how to drive the broadcast loop.
+  //   serial     — await each HTTP /_broadcast call (call-rate-bound baseline)
+  //   pool       — keep publisherConcurrency HTTP calls in flight
+  //   fireforget — dispatch HTTP calls without awaiting
+  //   nats       — publish via NATS (anycable-go subscribes to the channel)
   publisher?: PublisherMode;
   publisherConcurrency?: number; // pool mode only; default 16
 }
@@ -126,12 +128,41 @@ export interface AnycableUrls {
   cableUrl: string;
   broadcastUrl: string;
   broadcastSecret?: string;
+  // Optional NATS broadcaster — used when publisher mode is "nats".
+  natsUrl?: string;     // e.g. nats://anycable-go-pro.railway.internal:4242
+  natsSubject?: string; // default __anycable__ (matches anycable-go default)
 }
 
 async function runAnycablePublisher(
   p: ThroughputParams,
   urls: AnycableUrls
 ): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const mode = p.publisher ?? "serial";
+
+  if (mode === "nats") {
+    if (!urls.natsUrl) throw new Error("nats publisher requires natsUrl");
+    const subject = urls.natsSubject || "__anycable__";
+    const sc = StringCodec();
+    const nc = await natsConnect({ servers: urls.natsUrl });
+    try {
+      for (let seq = 1; seq <= p.totalMessages; seq++) {
+        const payload = JSON.stringify({
+          stream: p.stream,
+          data: JSON.stringify({ seq, sentAt: Date.now(), text: `m${seq}` }),
+        });
+        nc.publish(subject, sc.encode(payload));
+        if (p.intervalMs > 0) await sleep(p.intervalMs);
+      }
+      // flush before draining so all publishes are on the wire
+      await nc.flush();
+    } finally {
+      await nc.drain();
+    }
+    return;
+  }
+
+  // HTTP-based modes (serial / pool / fireforget)
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (urls.broadcastSecret) headers["Authorization"] = `Bearer ${urls.broadcastSecret}`;
   const dispatch = (seq: number) =>
@@ -143,9 +174,6 @@ async function runAnycablePublisher(
         data: JSON.stringify({ seq, sentAt: Date.now(), text: `m${seq}` }),
       }),
     }).catch(() => { /* lost broadcasts surface in deliveryRatePct */ });
-
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const mode = p.publisher ?? "serial";
 
   if (mode === "serial") {
     for (let seq = 1; seq <= p.totalMessages; seq++) {

@@ -31,6 +31,7 @@
   "dependencies": {
     "@anycable/core": "^1.1.6",
     "express": "^4.21.0",
+    "nats": "^2.29.3",
     "socket.io": "^4.7.0",
     "socket.io-client": "^4.7.0",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.67.0",

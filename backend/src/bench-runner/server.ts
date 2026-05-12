@@ -42,6 +42,8 @@ const ANYCABLE_BROADCAST_URL =
   process.env.ANYCABLE_BROADCAST_URL ||
   "http://anycable-go.railway.internal:8080/_broadcast";
 const ANYCABLE_BROADCAST_SECRET = process.env.ANYCABLE_BROADCAST_SECRET || "";
+const ANYCABLE_NATS_URL = process.env.ANYCABLE_NATS_URL || "";
+const ANYCABLE_NATS_SUBJECT = process.env.ANYCABLE_NATS_SUBJECT || "";
 const UWS_WS_URL =
   process.env.UWS_WS_URL || "ws://uws-server.railway.internal:3000/ws";
 const UWS_HTTP_URL =
@@ -236,9 +238,9 @@ app.post("/bench-avalanche-uws", async (req, res) => {
 // each setup breaks (delivery drops, latency tail blows out) is the headline.
 function throughputParamsFromQuery(req: express.Request, defaultStream: string): ThroughputParams {
   const publisherRaw = (req.query.publisher as string) || "";
-  const publisher =
-    publisherRaw === "pool" || publisherRaw === "fireforget"
-      ? (publisherRaw as "pool" | "fireforget")
+  const publisher: "serial" | "pool" | "fireforget" | "nats" =
+    publisherRaw === "pool" || publisherRaw === "fireforget" || publisherRaw === "nats"
+      ? (publisherRaw as "pool" | "fireforget" | "nats")
       : "serial";
   return {
     n: parseInt((req.query.n as string) || "10000", 10),
@@ -256,10 +258,15 @@ app.post("/bench-throughput-anycable", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-ac-${Date.now()}`);
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
   const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
+  const natsUrl = (req.query.natsUrl as string) || ANYCABLE_NATS_URL || undefined;
+  const natsSubject =
+    (req.query.natsSubject as string) || ANYCABLE_NATS_SUBJECT || undefined;
   const result = await runThroughputAnycable(params, {
     cableUrl,
     broadcastUrl,
     broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+    natsUrl,
+    natsSubject,
   });
   res.json(result);
 });
