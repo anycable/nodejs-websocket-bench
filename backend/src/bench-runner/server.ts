@@ -235,6 +235,11 @@ app.post("/bench-avalanche-uws", async (req, res) => {
 // Sweep the rate from a CLI driver: 1, 10, 100, 1000 msg/sec target. Where
 // each setup breaks (delivery drops, latency tail blows out) is the headline.
 function throughputParamsFromQuery(req: express.Request, defaultStream: string): ThroughputParams {
+  const publisherRaw = (req.query.publisher as string) || "";
+  const publisher =
+    publisherRaw === "pool" || publisherRaw === "fireforget"
+      ? (publisherRaw as "pool" | "fireforget")
+      : "serial";
   return {
     n: parseInt((req.query.n as string) || "10000", 10),
     totalMessages: parseInt((req.query.total as string) || "100", 10),
@@ -242,6 +247,8 @@ function throughputParamsFromQuery(req: express.Request, defaultStream: string):
     rampPerSec: parseInt((req.query.ramp as string) || "200", 10),
     stream: (req.query.stream as string) || defaultStream,
     drainSec: parseInt((req.query.drain as string) || "30", 10),
+    publisher,
+    publisherConcurrency: parseInt((req.query.publisherConcurrency as string) || "16", 10),
   };
 }
 

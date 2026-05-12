@@ -29,6 +29,8 @@ import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
 
+export type PublisherMode = "serial" | "pool" | "fireforget";
+
 export interface ThroughputParams {
   n: number;             // subscribers
   totalMessages: number; // broadcasts to fan out to every subscriber
@@ -36,6 +38,12 @@ export interface ThroughputParams {
   rampPerSec: number;
   stream: string;
   drainSec: number;      // extra wait after publish completes to catch the tail
+  // AnyCable-only: how to drive the HTTP /_broadcast loop.
+  //   serial     — await each call (default; baseline, but call-rate-bound)
+  //   pool       — keep publisherConcurrency in flight; bounded parallelism
+  //   fireforget — dispatch without awaiting, sleep intervalMs between
+  publisher?: PublisherMode;
+  publisherConcurrency?: number; // pool mode only; default 16
 }
 
 export interface ThroughputResult extends JitterResult {
@@ -120,6 +128,66 @@ export interface AnycableUrls {
   broadcastSecret?: string;
 }
 
+async function runAnycablePublisher(
+  p: ThroughputParams,
+  urls: AnycableUrls
+): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (urls.broadcastSecret) headers["Authorization"] = `Bearer ${urls.broadcastSecret}`;
+  const dispatch = (seq: number) =>
+    fetch(urls.broadcastUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        stream: p.stream,
+        data: JSON.stringify({ seq, sentAt: Date.now(), text: `m${seq}` }),
+      }),
+    }).catch(() => { /* lost broadcasts surface in deliveryRatePct */ });
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const mode = p.publisher ?? "serial";
+
+  if (mode === "serial") {
+    for (let seq = 1; seq <= p.totalMessages; seq++) {
+      await dispatch(seq);
+      if (p.intervalMs > 0) await sleep(p.intervalMs);
+    }
+    return;
+  }
+
+  if (mode === "fireforget") {
+    const inflight: Promise<unknown>[] = [];
+    for (let seq = 1; seq <= p.totalMessages; seq++) {
+      inflight.push(dispatch(seq));
+      if (p.intervalMs > 0) await sleep(p.intervalMs);
+    }
+    await Promise.allSettled(inflight);
+    return;
+  }
+
+  // pool: bounded concurrency, intervalMs paces dispatches
+  const concurrency = Math.max(1, p.publisherConcurrency ?? 16);
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  const acquire = () =>
+    new Promise<void>((resolve) => {
+      if (active < concurrency) { active++; resolve(); }
+      else waiters.push(() => { active++; resolve(); });
+    });
+  const release = () => {
+    active--;
+    const next = waiters.shift();
+    if (next) next();
+  };
+  const inflight: Promise<unknown>[] = [];
+  for (let seq = 1; seq <= p.totalMessages; seq++) {
+    await acquire();
+    inflight.push(dispatch(seq).finally(release));
+    if (p.intervalMs > 0) await sleep(p.intervalMs);
+  }
+  await Promise.allSettled(inflight);
+}
+
 export async function runThroughputAnycable(
   p: ThroughputParams,
   urls: AnycableUrls
@@ -152,24 +220,9 @@ export async function runThroughputAnycable(
   console.log(`[tp-ac] all ramped; starting publisher`);
 
   const publishStart = Date.now();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (urls.broadcastSecret) headers["Authorization"] = `Bearer ${urls.broadcastSecret}`;
-  for (let seq = 1; seq <= p.totalMessages; seq++) {
-    const data = JSON.stringify({ seq, sentAt: Date.now(), text: `m${seq}` });
-    try {
-      await fetch(urls.broadcastUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ stream: p.stream, data }),
-      });
-    } catch {
-      /* lost individual broadcasts show up in deliveryRatePct */
-    }
-    if (p.intervalMs > 0) {
-      await new Promise((r) => setTimeout(r, p.intervalMs));
-    }
-  }
+  await runAnycablePublisher(p, urls);
   const publishingMs = Date.now() - publishStart;
+  console.log(`[tp-ac] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
 
   // Drain — let any in-flight messages land before tearing down.
   await new Promise((r) => setTimeout(r, p.drainSec * 1000));
