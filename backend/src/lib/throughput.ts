@@ -285,6 +285,10 @@ export interface AnycableClusterUrls {
   cableUrlB: string;       // ws + cable URL for instance B
   broadcastUrl: string;    // single HTTP /_broadcast target (any instance — NATS fans out)
   broadcastSecret?: string;
+  // Optional NATS for `publisher=nats` mode (more idiomatic for a NATS-backed
+  // cluster — app publishes to NATS directly, both instances consume).
+  natsUrl?: string;
+  natsSubject?: string;
 }
 
 export async function runThroughputAnycableCluster(
@@ -321,11 +325,13 @@ export async function runThroughputAnycableCluster(
   console.log(`[tp-ac-cluster] all ramped (A=${half}, B=${p.n - half}); starting publisher`);
 
   const publishStart = Date.now();
-  // Reuse the same HTTP publisher logic AnyCable single-instance uses — pool/serial/fireforget.
+  // Reuse runAnycablePublisher — supports HTTP serial/pool/fireforget and NATS modes.
   await runAnycablePublisher(p, {
     cableUrl: urls.cableUrlA,
     broadcastUrl: urls.broadcastUrl,
     broadcastSecret: urls.broadcastSecret,
+    natsUrl: urls.natsUrl,
+    natsSubject: urls.natsSubject,
   });
   const publishingMs = Date.now() - publishStart;
   console.log(`[tp-ac-cluster] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);

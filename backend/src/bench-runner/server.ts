@@ -54,6 +54,9 @@ const ANYCABLE_CLUSTER_URL_B =
 const ANYCABLE_CLUSTER_BROADCAST_URL =
   process.env.ANYCABLE_CLUSTER_BROADCAST_URL ||
   "http://anycable-go-cluster-a.railway.internal:8080/_broadcast";
+const ANYCABLE_CLUSTER_NATS_URL =
+  process.env.ANYCABLE_CLUSTER_NATS_URL ||
+  "nats://nats.railway.internal:4222";
 const ANYCABLE_URL =
   process.env.ANYCABLE_URL || "ws://anycable-go.railway.internal:8080/cable";
 const ANYCABLE_BROADCAST_URL =
@@ -313,11 +316,15 @@ app.post("/bench-throughput-anycable-cluster", async (req, res) => {
   const cableUrlA = (req.query.cableUrlA as string) || ANYCABLE_CLUSTER_URL_A;
   const cableUrlB = (req.query.cableUrlB as string) || ANYCABLE_CLUSTER_URL_B;
   const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_CLUSTER_BROADCAST_URL;
+  const natsUrl = (req.query.natsUrl as string) || ANYCABLE_CLUSTER_NATS_URL || undefined;
+  const natsSubject = (req.query.natsSubject as string) || undefined;
   const result = await runThroughputAnycableCluster(params, {
     cableUrlA,
     cableUrlB,
     broadcastUrl,
     broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+    natsUrl,
+    natsSubject,
   });
   res.json(result);
 });
