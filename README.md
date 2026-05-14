@@ -428,6 +428,9 @@ For the bench-runner shards specifically: they're ~64 MB each at idle, so 50 of 
 | `PORT`                 | `3000` / `3001`      | socketio-server / bench-runner | HTTP port |
 | `SOCKETIO_CSR`         | *(unset / `0`)*      | socketio-server  | `1` enables Connection State Recovery |
 | `SOCKETIO_CSR_MAX_MS`  | `120000` (2 min)     | socketio-server  | `maxDisconnectionDuration` for CSR |
+| `REDIS_URL`            | *(unset)*            | socketio-server  | When set, enables the Socket.io Redis adapter for multi-node fan-out. Mutually exclusive with CSR. |
+| `SOCKETIO_REDIS_URL_A` | `http://socketio-server-redis-a.railway.internal:3000` | bench-runner | First multi-node socket.io target for the Redis-adapter throughput test |
+| `SOCKETIO_REDIS_URL_B` | `http://socketio-server-redis-b.railway.internal:3000` | bench-runner | Second multi-node socket.io target for the Redis-adapter throughput test |
 | `SOCKETIO_URL`         | `http://socketio-server.railway.internal:3000` | bench-runner | Target for socketio bench endpoints |
 | `ANYCABLE_URL`         | `ws://anycable-go.railway.internal:8080/cable` | bench-runner | Target for anycable bench endpoints |
 | `ANYCABLE_BROADCAST_URL` | `http://anycable-go.railway.internal:8080/_broadcast` | bench-runner | Broadcast endpoint for AnyCable runs |

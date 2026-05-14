@@ -31,12 +31,19 @@ import {
   runThroughputAnycable,
   runThroughputSocketio,
   runThroughputSocketioCsr,
+  runThroughputSocketioRedis,
   runThroughputUws,
   type ThroughputParams,
 } from "../lib/throughput.js";
 
 const SOCKETIO_URL =
   process.env.SOCKETIO_URL || "http://socketio-server.railway.internal:3000";
+const SOCKETIO_REDIS_URL_A =
+  process.env.SOCKETIO_REDIS_URL_A ||
+  "http://socketio-server-redis-a.railway.internal:3000";
+const SOCKETIO_REDIS_URL_B =
+  process.env.SOCKETIO_REDIS_URL_B ||
+  "http://socketio-server-redis-b.railway.internal:3000";
 const ANYCABLE_URL =
   process.env.ANYCABLE_URL || "ws://anycable-go.railway.internal:8080/cable";
 const ANYCABLE_BROADCAST_URL =
@@ -286,6 +293,23 @@ app.post("/bench-throughput-socketio-csr", async (req, res) => {
   res.json(result);
 });
 
+// Socket.io with Redis adapter — clients split 50/50 across two instances
+// (A and B) sharing one Redis; publisher runs in-process on A via
+// /publish-local. Half of the deliveries fan out locally on A, half cross
+// Redis pub/sub to B. This shape mirrors production multi-node Socket.io,
+// which is what you'd run once you grow past one Node's socket budget.
+// `?subscriberUrlA=` and `?subscriberUrlB=` override the defaults.
+app.post("/bench-throughput-socketio-redis", async (req, res) => {
+  const params = throughputParamsFromQuery(req, `tp-redis-${Date.now()}`);
+  const subscriberUrlA = (req.query.subscriberUrlA as string) || SOCKETIO_REDIS_URL_A;
+  const subscriberUrlB = (req.query.subscriberUrlB as string) || SOCKETIO_REDIS_URL_B;
+  const result = await runThroughputSocketioRedis(params, {
+    subscriberUrlA,
+    subscriberUrlB,
+  });
+  res.json(result);
+});
+
 app.post("/bench-throughput-uws", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-uws-${Date.now()}`);
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
@@ -366,4 +390,6 @@ app.listen(port, () => {
   console.log(`  anycable broadcast: ${ANYCABLE_BROADCAST_URL}`);
   console.log(`  uws ws target:      ${UWS_WS_URL}`);
   console.log(`  uws http target:    ${UWS_HTTP_URL}`);
+  console.log(`  socketio redis A:   ${SOCKETIO_REDIS_URL_A}`);
+  console.log(`  socketio redis B:   ${SOCKETIO_REDIS_URL_B}`);
 });

@@ -301,6 +301,81 @@ export async function runThroughputSocketioCsr(
   });
 }
 
+// Socket.io + Redis adapter — two instances behind a shared Redis. Clients
+// are split 50/50 across the instances; publisher runs in-process on
+// instance A via /publish-local. Half the deliveries fan out locally on A,
+// half cross Redis pub/sub to instance B and fan out there. This shape
+// matches production multi-node Socket.io deployment, and answers the
+// question "what does going horizontal cost on Socket.io?".
+export interface SocketioRedisUrls {
+  subscriberUrlA: string; // ws + http base for instance A
+  subscriberUrlB: string; // ws + http base for instance B
+  // publisher is always instance A
+}
+
+export async function runThroughputSocketioRedis(
+  p: ThroughputParams,
+  urls: SocketioRedisUrls
+): Promise<ThroughputResult> {
+  suppressClientRejections();
+  console.log(`[tp-sio-redis] params=${JSON.stringify(p)} urls=${JSON.stringify(urls)}`);
+  const startedAt = Date.now();
+  const rss = trackPeakRss();
+
+  const stats: ClientStat[] = [];
+  const sockets: Socket[] = [];
+  const half = Math.floor(p.n / 2);
+
+  for (let i = 0; i < p.n; i++) {
+    const stat = newStat();
+    stats.push(stat);
+    const target = i < half ? urls.subscriberUrlA : urls.subscriberUrlB;
+    const socket = ioClient(target, {
+      transports: ["websocket"],
+      timeout: 10000,
+      reconnection: false,
+    });
+    socket.on("connect", () => socket.emit("join", p.stream));
+    socket.on("connect_error", () => stat.failedConnects++);
+    socket.on("message", (msg: unknown) => recordMsg(stat, msg));
+    sockets.push(socket);
+    await maybePauseForRamp(p, i, "tp-sio-redis");
+  }
+
+  await settleAfterRamp();
+  console.log(`[tp-sio-redis] all ramped (A=${half}, B=${p.n - half}); starting publisher on A`);
+
+  const publishStart = Date.now();
+  const qs = new URLSearchParams({
+    total: String(p.totalMessages),
+    interval: String(p.intervalMs),
+    stream: p.stream,
+  });
+  try {
+    await fetch(`${urls.subscriberUrlA}/publish-local?${qs.toString()}`, { method: "POST" });
+  } catch {
+    /* publish kickoff failure surfaces as zero deliveries */
+  }
+  await waitForServerPublish(p);
+  const publishingMs = Date.now() - publishStart - p.drainSec * 1000;
+
+  for (const s of sockets) {
+    try { s.disconnect(); } catch { /* */ }
+  }
+
+  const peakRssMb = rss.stop();
+  const base = summarize({
+    label: "socketio-redis",
+    totalMessages: p.totalMessages,
+    stats,
+    elapsedMs: Date.now() - startedAt,
+    peakRssMb,
+  });
+  const result = augment(base, p, publishingMs);
+  console.log(`[tp-sio-redis] result: ${JSON.stringify(result)}`);
+  return result;
+}
+
 async function runSocketioCommon(
   p: ThroughputParams,
   urls: SocketioUrls,

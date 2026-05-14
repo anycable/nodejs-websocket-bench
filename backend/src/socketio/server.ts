@@ -4,26 +4,17 @@
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { Redis } from "ioredis";
 
 const app = express();
 const httpServer = createServer(app);
 
-// Connection State Recovery (opt-in, experimental — Socket.io 4.6+).
-// When enabled, the server stashes socket.id + rooms + socket.data on
-// unexpected disconnects, and replays buffered packets when a client
-// reconnects with the same private session id (pid) + last offset.
-//
-// Caveats (from the Socket.io docs):
-//   - default in-memory adapter stores state per-process, lost on restart
-//   - Redis PUB/SUB adapter is NOT compatible; use Redis Streams or MongoDB
-//     to survive restarts / work across nodes
-//   - "the recovery will not always be successful" — application-level
-//     reconciliation is still required
 const enableCSR = process.env.SOCKETIO_CSR === "1";
-const csrMaxDisconnectionMs = parseInt(process.env.SOCKETIO_CSR_MAX_MS || "120000"); // 2 min
+const csrMaxDisconnectionMs = parseInt(process.env.SOCKETIO_CSR_MAX_MS || "120000");
 
 const io = new Server(httpServer, {
-  transports: ["websocket"], // fair comparison — skip long-polling upgrade
+  transports: ["websocket"],
   pingInterval: 3000,
   pingTimeout: 6000,
   ...(enableCSR
@@ -35,6 +26,26 @@ const io = new Server(httpServer, {
       }
     : {}),
 });
+
+// Redis pub/sub adapter — turns this Socket.io instance into one node of
+// a horizontally-scaled cluster. Every io.emit() that targets sockets
+// outside this process is published to Redis, and other instances of
+// Socket.io subscribed to the same Redis channel re-emit to their local
+// sockets. This is the canonical Socket.io multi-node setup. Enabled
+// when REDIS_URL is set in the environment.
+//
+// Note: this adapter is incompatible with Connection State Recovery —
+// CSR's per-process state isn't shared across the cluster. Use one or
+// the other, not both.
+const redisUrl = process.env.REDIS_URL || "";
+if (redisUrl) {
+  const pubClient = new Redis(redisUrl);
+  const subClient = pubClient.duplicate();
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log(`Redis adapter: ENABLED (url=${redisUrl})`);
+} else {
+  console.log(`Redis adapter: disabled (single-process emit only)`);
+}
 
 if (enableCSR) {
   console.log(`Connection State Recovery: ENABLED (maxDisconnectionDuration=${csrMaxDisconnectionMs}ms)`);
