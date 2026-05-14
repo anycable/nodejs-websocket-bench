@@ -14,6 +14,7 @@
 // `curl --max-time` when triggering. Console output is also captured by Railway.
 
 import express from "express";
+import { spawn } from "node:child_process";
 
 import { paramsFromQuery } from "../lib/params.js";
 import {
@@ -294,6 +295,65 @@ app.post("/bench-throughput-uws", async (req, res) => {
     serverHttpUrl: httpUrl,
   });
   res.json(result);
+});
+
+// Run Vladimir's stress_publications benchi binary baked into the image
+// (Dockerfile stage `benchi`). It embeds the full anycable-go server
+// in-process — no network between bench client and server — for an
+// apples-to-apples comparison with the Socket.io / uWS in-process emit()
+// / publish() tests. Knobs map 1:1 to the binary's flags.
+app.post("/bench-benchi-anycable", async (req, res) => {
+  const args = [
+    "-c", String(parseInt((req.query.c as string) || "10000", 10)),
+    "-r", String(parseInt((req.query.r as string) || "100", 10)),
+    "-d", (req.query.d as string) || "10s",
+    "-S", String(parseInt((req.query.S as string) || "1", 10)),
+    "-s", String(parseInt((req.query.s as string) || "1", 10)),
+    "--non-interactive",
+  ];
+  const optionalFlags: Array<[string, string]> = [
+    ["drain-timeout", (req.query.drainTimeout as string) || ""],
+    ["max-inflight", (req.query.maxInflight as string) || ""],
+    ["publish-workers", (req.query.publishWorkers as string) || ""],
+    ["publish-batch", (req.query.publishBatch as string) || ""],
+    ["setup-failure-tolerance", (req.query.tolerance as string) || ""],
+    ["seed", (req.query.seed as string) || ""],
+  ];
+  for (const [flag, value] of optionalFlags) {
+    if (value) { args.push(`--${flag}`, value); }
+  }
+
+  const startedAt = Date.now();
+  console.log(`[benchi] stress_publications ${args.join(" ")}`);
+  const child = spawn("stress_publications", args);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+
+  child.on("close", (code) => {
+    const elapsedMs = Date.now() - startedAt;
+    // Parse key=value lines from stdout into a flat object.
+    const result: Record<string, number | string> = {};
+    for (const line of stdout.split("\n")) {
+      const eq = line.indexOf("=");
+      if (eq === -1) continue;
+      const key = line.slice(0, eq).trim();
+      const raw = line.slice(eq + 1).trim();
+      const num = Number(raw);
+      result[key] = Number.isFinite(num) && raw !== "" ? num : raw;
+    }
+    result.exitCode = code ?? -1;
+    result.elapsedMs = elapsedMs;
+    result.args = args.join(" ");
+    if (stderr) result.stderr = stderr.slice(-1000);
+    console.log(`[benchi] done in ${elapsedMs}ms (exit=${code}) max=${result.throughput_max_msgs_per_sec} short=${result.clients_short}`);
+    res.json(result);
+  });
+  child.on("error", (err) => {
+    console.error(`[benchi] spawn error: ${err.message}`);
+    res.status(500).json({ error: err.message, stderr });
+  });
 });
 
 const port = parseInt(process.env.PORT || "3001", 10);
