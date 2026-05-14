@@ -273,6 +273,84 @@ export async function runThroughputAnycable(
 }
 
 // ---------------------------------------------------------------------------
+// AnyCable cluster — 2 anycable-go instances behind a shared NATS broadcaster.
+// Clients are split 50/50 across the instances; publisher runs in the bench-
+// runner and POSTs to the cluster's HTTP /_broadcast endpoint (on instance A,
+// since both instances receive every broadcast via NATS regardless of which
+// one the publisher targets). This is the production shape for AnyCable
+// horizontally scaled — symmetric to the Socket.io + Redis adapter cluster
+// test (pool=16 HTTP publisher, half the deliveries on each instance).
+export interface AnycableClusterUrls {
+  cableUrlA: string;       // ws + cable URL for instance A
+  cableUrlB: string;       // ws + cable URL for instance B
+  broadcastUrl: string;    // single HTTP /_broadcast target (any instance — NATS fans out)
+  broadcastSecret?: string;
+}
+
+export async function runThroughputAnycableCluster(
+  p: ThroughputParams,
+  urls: AnycableClusterUrls
+): Promise<ThroughputResult> {
+  suppressClientRejections();
+  console.log(`[tp-ac-cluster] params=${JSON.stringify(p)}`);
+  const startedAt = Date.now();
+  const rss = trackPeakRss();
+
+  const stats: ClientStat[] = [];
+  const cables: ReturnType<typeof createCable>[] = [];
+  const half = Math.floor(p.n / 2);
+
+  for (let i = 0; i < p.n; i++) {
+    const stat = newStat();
+    stats.push(stat);
+    const target = i < half ? urls.cableUrlA : urls.cableUrlB;
+    const cable = createCable(target, {
+      websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
+      protocol: "actioncable-v1-ext-json",
+      logLevel: "error" as never,
+    });
+    cable.on("close", () => {});
+    cable.on("disconnect", () => {});
+    const channel = cable.streamFrom(p.stream);
+    channel.on("message", (msg: unknown) => recordMsg(stat, msg));
+    cables.push(cable);
+    await maybePauseForRamp(p, i, "tp-ac-cluster");
+  }
+
+  await settleAfterRamp();
+  console.log(`[tp-ac-cluster] all ramped (A=${half}, B=${p.n - half}); starting publisher`);
+
+  const publishStart = Date.now();
+  // Reuse the same HTTP publisher logic AnyCable single-instance uses — pool/serial/fireforget.
+  await runAnycablePublisher(p, {
+    cableUrl: urls.cableUrlA,
+    broadcastUrl: urls.broadcastUrl,
+    broadcastSecret: urls.broadcastSecret,
+  });
+  const publishingMs = Date.now() - publishStart;
+  console.log(`[tp-ac-cluster] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
+
+  // Drain
+  await new Promise((r) => setTimeout(r, p.drainSec * 1000));
+
+  for (const c of cables) {
+    try { c.disconnect(); } catch { /* */ }
+  }
+
+  const peakRssMb = rss.stop();
+  const base = summarize({
+    label: "anycable-cluster",
+    totalMessages: p.totalMessages,
+    stats,
+    elapsedMs: Date.now() - startedAt,
+    peakRssMb,
+  });
+  const result = augment(base, p, publishingMs);
+  console.log(`[tp-ac-cluster] result: ${JSON.stringify(result)}`);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Socket.io variants — both share the same connection pattern and the same
 // in-process /publish-local trigger; only socket.io-client options differ.
 
@@ -299,6 +377,64 @@ export async function runThroughputSocketioCsr(
     reconnectionDelayMax: 5000,
     reconnectionAttempts: Infinity,
   });
+}
+
+// HTTP publisher loop targeting Socket.io's /_broadcast endpoint on
+// instance A — same shape as runAnycablePublisher's HTTP modes, so the
+// publisher CPU work is symmetric across the cluster-comparison rows.
+async function runSocketioRedisHttpPublisher(
+  p: ThroughputParams,
+  baseUrl: string,
+  mode: PublisherMode | string
+): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const dispatch = (seq: number) =>
+    fetch(`${baseUrl}/_broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stream: p.stream,
+        data: JSON.stringify({ seq, sentAt: Date.now(), text: `m${seq}` }),
+      }),
+    }).catch(() => { /* lost broadcasts surface in deliveryRatePct */ });
+
+  if (mode === "serial") {
+    for (let seq = 1; seq <= p.totalMessages; seq++) {
+      await dispatch(seq);
+      if (p.intervalMs > 0) await sleep(p.intervalMs);
+    }
+    return;
+  }
+  if (mode === "fireforget") {
+    const inflight: Promise<unknown>[] = [];
+    for (let seq = 1; seq <= p.totalMessages; seq++) {
+      inflight.push(dispatch(seq));
+      if (p.intervalMs > 0) await sleep(p.intervalMs);
+    }
+    await Promise.allSettled(inflight);
+    return;
+  }
+  // pool (default): bounded concurrency
+  const concurrency = Math.max(1, p.publisherConcurrency ?? 16);
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  const acquire = () =>
+    new Promise<void>((resolve) => {
+      if (active < concurrency) { active++; resolve(); }
+      else waiters.push(() => { active++; resolve(); });
+    });
+  const release = () => {
+    active--;
+    const next = waiters.shift();
+    if (next) next();
+  };
+  const inflight: Promise<unknown>[] = [];
+  for (let seq = 1; seq <= p.totalMessages; seq++) {
+    await acquire();
+    inflight.push(dispatch(seq).finally(release));
+    if (p.intervalMs > 0) await sleep(p.intervalMs);
+  }
+  await Promise.allSettled(inflight);
 }
 
 // Socket.io + Redis adapter — two instances behind a shared Redis. Clients
@@ -343,21 +479,39 @@ export async function runThroughputSocketioRedis(
   }
 
   await settleAfterRamp();
-  console.log(`[tp-sio-redis] all ramped (A=${half}, B=${p.n - half}); starting publisher on A`);
+  const mode = p.publisher ?? "serial";
+  console.log(`[tp-sio-redis] all ramped (A=${half}, B=${p.n - half}); starting publisher (mode=${mode}) targeting A`);
 
+  // Two publisher shapes — selected by `?publisher=`:
+  //   default ("serial" / "inproc"): bench-runner POSTs /publish-local once
+  //     on instance A and A loops io.to().emit() in-process. Publisher CPU
+  //     shares A's event loop.
+  //   pool / fireforget: bench-runner drives an HTTP loop against A's
+  //     /_broadcast. Each emit publishes to Redis and is also delivered
+  //     locally on A. This mirrors the production shape where the app and
+  //     the WS layer are separate processes — the same shape AnyCable's
+  //     HTTP pool=16 row uses, so the comparison becomes apples to apples.
   const publishStart = Date.now();
-  const qs = new URLSearchParams({
-    total: String(p.totalMessages),
-    interval: String(p.intervalMs),
-    stream: p.stream,
-  });
-  try {
-    await fetch(`${urls.subscriberUrlA}/publish-local?${qs.toString()}`, { method: "POST" });
-  } catch {
-    /* publish kickoff failure surfaces as zero deliveries */
+  let publishingMs: number;
+  const httpModes = new Set(["pool", "fireforget"]);
+  if (httpModes.has(mode)) {
+    await runSocketioRedisHttpPublisher(p, urls.subscriberUrlA, mode);
+    publishingMs = Date.now() - publishStart;
+    await new Promise((r) => setTimeout(r, p.drainSec * 1000));
+  } else {
+    const qs = new URLSearchParams({
+      total: String(p.totalMessages),
+      interval: String(p.intervalMs),
+      stream: p.stream,
+    });
+    try {
+      await fetch(`${urls.subscriberUrlA}/publish-local?${qs.toString()}`, { method: "POST" });
+    } catch {
+      /* publish kickoff failure surfaces as zero deliveries */
+    }
+    await waitForServerPublish(p);
+    publishingMs = Date.now() - publishStart - p.drainSec * 1000;
   }
-  await waitForServerPublish(p);
-  const publishingMs = Date.now() - publishStart - p.drainSec * 1000;
 
   for (const s of sockets) {
     try { s.disconnect(); } catch { /* */ }

@@ -29,6 +29,7 @@ import { runJitterUws } from "../lib/jitter-uws.js";
 import { runAvalancheUws } from "../lib/avalanche-uws.js";
 import {
   runThroughputAnycable,
+  runThroughputAnycableCluster,
   runThroughputSocketio,
   runThroughputSocketioCsr,
   runThroughputSocketioRedis,
@@ -44,6 +45,15 @@ const SOCKETIO_REDIS_URL_A =
 const SOCKETIO_REDIS_URL_B =
   process.env.SOCKETIO_REDIS_URL_B ||
   "http://socketio-server-redis-b.railway.internal:3000";
+const ANYCABLE_CLUSTER_URL_A =
+  process.env.ANYCABLE_CLUSTER_URL_A ||
+  "ws://anycable-go-cluster-a.railway.internal:8080/cable";
+const ANYCABLE_CLUSTER_URL_B =
+  process.env.ANYCABLE_CLUSTER_URL_B ||
+  "ws://anycable-go-cluster-b.railway.internal:8080/cable";
+const ANYCABLE_CLUSTER_BROADCAST_URL =
+  process.env.ANYCABLE_CLUSTER_BROADCAST_URL ||
+  "http://anycable-go-cluster-a.railway.internal:8080/_broadcast";
 const ANYCABLE_URL =
   process.env.ANYCABLE_URL || "ws://anycable-go.railway.internal:8080/cable";
 const ANYCABLE_BROADCAST_URL =
@@ -293,6 +303,25 @@ app.post("/bench-throughput-socketio-csr", async (req, res) => {
   res.json(result);
 });
 
+// AnyCable cluster — 2 anycable-go instances behind shared NATS. Clients
+// split 50/50; publisher in bench-runner over HTTP /_broadcast (NATS fans
+// out to both instances). Symmetric to the socketio+Redis HTTP test —
+// answers "how does AnyCable scale horizontally vs Socket.io+Redis?".
+// `?cableUrlA=`, `?cableUrlB=`, and `?broadcastUrl=` override defaults.
+app.post("/bench-throughput-anycable-cluster", async (req, res) => {
+  const params = throughputParamsFromQuery(req, `tp-ac-cluster-${Date.now()}`);
+  const cableUrlA = (req.query.cableUrlA as string) || ANYCABLE_CLUSTER_URL_A;
+  const cableUrlB = (req.query.cableUrlB as string) || ANYCABLE_CLUSTER_URL_B;
+  const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_CLUSTER_BROADCAST_URL;
+  const result = await runThroughputAnycableCluster(params, {
+    cableUrlA,
+    cableUrlB,
+    broadcastUrl,
+    broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+  });
+  res.json(result);
+});
+
 // Socket.io with Redis adapter — clients split 50/50 across two instances
 // (A and B) sharing one Redis; publisher runs in-process on A via
 // /publish-local. Half of the deliveries fan out locally on A, half cross
@@ -392,4 +421,6 @@ app.listen(port, () => {
   console.log(`  uws http target:    ${UWS_HTTP_URL}`);
   console.log(`  socketio redis A:   ${SOCKETIO_REDIS_URL_A}`);
   console.log(`  socketio redis B:   ${SOCKETIO_REDIS_URL_B}`);
+  console.log(`  anycable cluster A: ${ANYCABLE_CLUSTER_URL_A}`);
+  console.log(`  anycable cluster B: ${ANYCABLE_CLUSTER_URL_B}`);
 });
