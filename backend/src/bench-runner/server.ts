@@ -309,8 +309,10 @@ app.post("/bench-benchi-anycable", async (req, res) => {
     "-d", (req.query.d as string) || "10s",
     "-S", String(parseInt((req.query.S as string) || "1", 10)),
     "-s", String(parseInt((req.query.s as string) || "1", 10)),
-    "--non-interactive",
   ];
+  // --non-interactive suppresses lifecycle logs (incl. setup errors) on
+  // stderr; off by default so we can see what's wrong on failures.
+  if (req.query.quiet === "1") args.push("--non-interactive");
   const optionalFlags: Array<[string, string]> = [
     ["drain-timeout", (req.query.drainTimeout as string) || ""],
     ["max-inflight", (req.query.maxInflight as string) || ""],
