@@ -3,7 +3,7 @@
 # bench-runner an in-process AnyCable throughput probe (embedded server,
 # loopback httptest.Server) for apples-to-apples comparison with the
 # Socket.io / uWS in-process emit() / publish() tests.
-FROM golang:1.24-trixie AS benchi
+FROM golang:1.26-trixie AS benchi
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch dev/benchi https://github.com/anycable/anycable.git /src/anycable
