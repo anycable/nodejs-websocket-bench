@@ -24,6 +24,62 @@ import { spawnSync } from "child_process";
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+// Poll Railway deployment status for a specific service. Returns the
+// latest deployment whose createdAt is at-or-after `triggeredAtMs` and
+// whose status is SUCCESS. Returns null on timeout. Throws if the
+// deployment ends in a terminal failure state.
+async function waitForNewSuccessfulDeployment(
+  serviceName: string,
+  triggeredAtMs: number,
+  timeoutMs = 6 * 60 * 1000,
+  pollIntervalMs = 5000,
+): Promise<{ id: string; status: string; createdAt: string } | null> {
+  const startedAt = Date.now();
+  // Allow 10s slack on createdAt vs trigger time (clock skew, propagation).
+  const minCreatedAt = triggeredAtMs - 10_000;
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = spawnSync("railway", ["status", "--json"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+    });
+    if (result.status !== 0) {
+      console.log(`  [poll] railway status failed: ${result.stderr?.slice(0, 200)}`);
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    let data: any;
+    try {
+      data = JSON.parse(result.stdout);
+    } catch {
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    const env = data?.environments?.edges?.[0]?.node;
+    const svc = env?.serviceInstances?.edges?.find(
+      (e: any) => e?.node?.serviceName === serviceName,
+    )?.node;
+    const ld = svc?.latestDeployment;
+    if (ld?.createdAt) {
+      const createdMs = new Date(ld.createdAt).getTime();
+      const status = ld.status || "UNKNOWN";
+      if (createdMs >= minCreatedAt) {
+        if (status === "SUCCESS") {
+          return { id: ld.id, status, createdAt: ld.createdAt };
+        }
+        if (status === "FAILED" || status === "CRASHED" || status === "REMOVED") {
+          throw new Error(
+            `deployment for ${serviceName} ended in terminal state ${status}`,
+          );
+        }
+        // INITIALIZING, BUILDING, DEPLOYING — keep polling
+        console.log(`  [poll] ${serviceName} status=${status} (${Math.round((Date.now() - startedAt) / 1000)}s)`);
+      }
+    }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
+  return null;
+}
+
 // bench-runner requests can take many minutes (steady-state + deploys
 // + post-deploy hold). Match the server-side runner's worst-case window.
 setGlobalDispatcher(
@@ -106,26 +162,52 @@ const trigger = async () => {
     console.log(
       `\n[driver] redeploying ${svc} (node ${i + 1}/${services.length})`,
     );
-    const t0 = Date.now();
+    const triggeredAt = Date.now();
     const result = spawnSync("railway", ["redeploy", "-s", svc, "--yes"], {
       stdio: "inherit",
       encoding: "utf-8",
     });
-    const elapsedMs = Date.now() - t0;
+    const triggerElapsedMs = Date.now() - triggeredAt;
     if (result.status !== 0) {
       console.error(
-        `[driver] railway redeploy failed for ${svc} (exit ${result.status}, ${elapsedMs}ms)`,
+        `[driver] railway redeploy failed for ${svc} (exit ${result.status}, ${triggerElapsedMs}ms)`,
       );
       // Continue to the next node anyway; the bench-runner will record
       // whatever happened.
     } else {
       console.log(
-        `[driver] ${svc} redeploy command returned in ${elapsedMs}ms`,
+        `[driver] ${svc} redeploy command returned in ${triggerElapsedMs}ms — polling for completion`,
       );
     }
+    // Wait for THIS deploy to actually finish before triggering the
+    // next node. This is what makes the deploy "rolling" vs "all at
+    // once": real rolling deploys ensure each node is back to
+    // RUNNING before disrupting the next.
     if (i < services.length - 1) {
-      console.log(`[driver] settle ${settleBetweenSec}s before next node`);
+      const dep = await waitForNewSuccessfulDeployment(svc, triggeredAt);
+      if (dep) {
+        const totalMs = Date.now() - triggeredAt;
+        console.log(
+          `[driver] ${svc} deploy SUCCESS (id=${dep.id.slice(0, 8)}, ${totalMs}ms total) — ${settleBetweenSec}s buffer before next node`,
+        );
+      } else {
+        console.log(
+          `[driver] ${svc} deploy poll TIMED OUT — proceeding to next node anyway`,
+        );
+      }
+      // A small buffer after SUCCESS gives traffic a moment to migrate
+      // back before we hit the next node.
       await new Promise((r) => setTimeout(r, settleBetweenSec * 1000));
+    } else {
+      // Last node — just log when it finishes (don't gate further work on it).
+      waitForNewSuccessfulDeployment(svc, triggeredAt)
+        .then((dep) => {
+          if (dep)
+            console.log(
+              `[driver] final node ${svc} deploy SUCCESS (id=${dep.id.slice(0, 8)})`,
+            );
+        })
+        .catch(() => {});
     }
   }
   console.log(`\n[driver] all ${services.length} nodes redeployed`);
