@@ -6,7 +6,7 @@
 
 FROM debian:trixie-slim AS downloader
 ARG GITHUB_TOKEN
-ARG PRO_VERSION=v1.6.13
+ARG PRO_VERSION=v1.6.14
 ARG ASSET_NAME=anycable-go-linux-amd64
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl jq ca-certificates \
