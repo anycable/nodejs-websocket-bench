@@ -21,6 +21,7 @@
     "bench:avalanche:uws": "tsx src/bench/avalanche-railway-uws.ts",
     "bench:idle:multi": "tsx src/bench/idle-multi.ts",
     "bench:avalanche:multi": "tsx src/bench/avalanche-multi.ts",
+    "bench:deploy-impact:socketio-redis": "tsx src/bench/deploy-impact-socketio-redis.ts",
     "bench:throughput:socketio": "tsx src/bench/throughput-socketio.ts",
     "bench:throughput:socketio-csr": "tsx src/bench/throughput-socketio-csr.ts",
     "bench:throughput:socketio-redis": "tsx src/bench/throughput-socketio-redis.ts",

@@ -25,6 +25,7 @@ import {
 import { runJitterAnycableTraced } from "../lib/jitter-anycable-traced.js";
 import { runIdleAnycable, runIdleSocketio, runIdleUws } from "../lib/idle-runner.js";
 import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
+import { runDeployImpactSocketio } from "../lib/deploy-impact-runner.js";
 import { runJitterUws } from "../lib/jitter-uws.js";
 import { runAvalancheUws } from "../lib/avalanche-uws.js";
 import {
@@ -228,6 +229,64 @@ app.post("/bench-avalanche-socketio", async (req, res) => {
   const result = await runAvalancheSocketio(
     { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
     serverUrl
+  );
+  res.json(result);
+});
+
+// Deploy-impact for clustered Socket.io + Redis adapter. Holds N clients
+// across the cluster nodes (round-robin), runs a publisher loop at a
+// fixed rate, and measures per-client gap (last-msg-before-disconnect
+// to first-msg-after-reconnect) plus messages lost in the gap window.
+//
+// Operator runs `railway redeploy -s socketio-server-redis-a --yes` then
+// `... -s socketio-server-redis-b --yes` (or however many nodes) DURING
+// the preDeploySec window. The runner detects deploys via the first
+// disconnect event so no explicit coordination needed.
+//
+// Query params:
+//   n               — clients (default 10000)
+//   ramp            — clients/sec ramp-up (default 200)
+//   stream          — broadcast channel (default deploy-impact)
+//   pubRate         — publish rate msg/sec (default 2)
+//   preDeploy       — steady-state seconds before operator triggers deploy (default 30)
+//   postDeploy      — wait seconds after deploy starts for full recovery (default 120)
+//   nodes           — comma-separated list of internal node URLs (default redis-a,redis-b)
+app.post("/bench-deploy-impact-socketio", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "10000", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const stream = (req.query.stream as string) || "deploy-impact";
+  const publishRatePerSec = parseInt((req.query.pubRate as string) || "2", 10);
+  const preDeploySec = parseInt((req.query.preDeploy as string) || "30", 10);
+  const postDeploySec = parseInt((req.query.postDeploy as string) || "120", 10);
+
+  const defaultNodes = [SOCKETIO_REDIS_URL_A, SOCKETIO_REDIS_URL_B];
+  const nodesParam = (req.query.nodes as string) || "";
+  const serverUrls = nodesParam
+    ? nodesParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : defaultNodes;
+  // The publisher targets one node's /_broadcast — with the Redis
+  // adapter, the broadcast fans out to all subscribers across the
+  // cluster, not just the locally-connected ones. We pick the first
+  // node deterministically so the test is reproducible; if that
+  // specific node is restarting, the publish will transiently fail
+  // and the runner's catch block continues without blowing up.
+  const publishUrl = `${serverUrls[0]}/_broadcast`;
+
+  const publish = async (seq: number): Promise<void> => {
+    const r = await fetch(publishUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stream, data: JSON.stringify({ seq }) }),
+    });
+    if (!r.ok) {
+      throw new Error(`publish HTTP ${r.status}`);
+    }
+  };
+
+  const result = await runDeployImpactSocketio(
+    { n, rampPerSec, stream, publishRatePerSec, preDeploySec, postDeploySec },
+    serverUrls,
+    publish,
   );
   res.json(result);
 });
