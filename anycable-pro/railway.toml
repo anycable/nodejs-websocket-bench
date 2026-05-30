@@ -1,0 +1,11 @@
+# Per-service Railway config for anycable-go-pro.
+#
+# The repo-root railway.toml sets dockerfilePath = "backend/Dockerfile"
+# which is correct for bench-runner / socketio-server / uws-server but
+# wrong for this service. Including this file in the upload root via
+# `railway up --service anycable-go-pro --path-as-root anycable-pro/`
+# overrides the repo default and tells Railway to use the local
+# Dockerfile that downloads the Pro binary from GitHub releases.
+
+[build]
+dockerfilePath = "Dockerfile"
