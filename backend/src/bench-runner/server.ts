@@ -26,6 +26,7 @@ import { runJitterAnycableTraced } from "../lib/jitter-anycable-traced.js";
 import { runIdleAnycable, runIdleSocketio, runIdleUws } from "../lib/idle-runner.js";
 import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
 import { runDeployImpactSocketio } from "../lib/deploy-impact-runner.js";
+import { runStandaloneDeployImpactSocketio } from "../lib/standalone-deploy-impact-runner.js";
 import { runJitterUws } from "../lib/jitter-uws.js";
 import { runAvalancheUws } from "../lib/avalanche-uws.js";
 import {
@@ -287,6 +288,39 @@ app.post("/bench-deploy-impact-socketio", async (req, res) => {
     { n, rampPerSec, stream, publishRatePerSec, preDeploySec, postDeploySec },
     serverUrls,
     publish,
+  );
+  res.json(result);
+});
+
+// Standalone deploy-impact (A2c-standalone). Holds N WS clients connected
+// to a WS service while a SEPARATE publisher service publishes broadcasts.
+// The local driver triggers `railway redeploy -s publisher` mid-test.
+// Expected outcome for properly standalone setups: 0 affected clients,
+// publisher-downtime-sized gap in receive cadence, zero true losses.
+//
+// Query params (same shape as embedded version):
+//   n               — clients (default 10000)
+//   ramp            — ramp/sec (default 200)
+//   stream          — broadcast channel (default standalone-publisher)
+//   duration        — total test runtime seconds (default 240)
+//   nodes           — comma-separated WS node URLs (default SOCKETIO_URL)
+app.post("/bench-deploy-impact-standalone-socketio", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "10000", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const stream = (req.query.stream as string) || "standalone-publisher";
+  const testDurationSec = parseInt(
+    (req.query.duration as string) || "240",
+    10,
+  );
+
+  const nodesParam = (req.query.nodes as string) || "";
+  const serverUrls = nodesParam
+    ? nodesParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : [SOCKETIO_URL];
+
+  const result = await runStandaloneDeployImpactSocketio(
+    { n, rampPerSec, stream, testDurationSec },
+    serverUrls,
   );
   res.json(result);
 });
