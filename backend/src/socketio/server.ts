@@ -13,10 +13,17 @@ const httpServer = createServer(app);
 const enableCSR = process.env.SOCKETIO_CSR === "1";
 const csrMaxDisconnectionMs = parseInt(process.env.SOCKETIO_CSR_MAX_MS || "120000");
 
+// Ping settings — env-overridable so we can flip between aggressive
+// (fast failure detection, default for jitter tests) and Socket.io's
+// production defaults (25s/20s, right for measuring publisher-restart
+// architectural property in standalone deploy-impact).
+const pingInterval = parseInt(process.env.SOCKETIO_PING_INTERVAL_MS || "3000");
+const pingTimeout = parseInt(process.env.SOCKETIO_PING_TIMEOUT_MS || "6000");
+
 const io = new Server(httpServer, {
   transports: ["websocket"],
-  pingInterval: 3000,
-  pingTimeout: 6000,
+  pingInterval,
+  pingTimeout,
   ...(enableCSR
     ? {
         connectionStateRecovery: {
