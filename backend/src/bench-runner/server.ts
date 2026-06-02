@@ -27,6 +27,7 @@ import { runIdleAnycable, runIdleSocketio, runIdleUws } from "../lib/idle-runner
 import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
 import { runDeployImpactSocketio } from "../lib/deploy-impact-runner.js";
 import { runStandaloneDeployImpactSocketio } from "../lib/standalone-deploy-impact-runner.js";
+import { runStandaloneDeployImpactAnycable } from "../lib/standalone-deploy-impact-anycable-runner.js";
 import { runJitterUws } from "../lib/jitter-uws.js";
 import { runAvalancheUws } from "../lib/avalanche-uws.js";
 import {
@@ -321,6 +322,28 @@ app.post("/bench-deploy-impact-standalone-socketio", async (req, res) => {
   const result = await runStandaloneDeployImpactSocketio(
     { n, rampPerSec, stream, testDurationSec },
     serverUrls,
+  );
+  res.json(result);
+});
+
+// Standalone deploy-impact for AnyCable. Same shape as the Socket.io
+// variant: clients hold connections to anycable-go, a separate publisher
+// service publishes broadcasts via HTTP, and the driver redeploys the
+// publisher mid-test. AnyCable is standalone by design, so we expect
+// affectedClients=0.
+app.post("/bench-deploy-impact-standalone-anycable", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "10000", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const stream = (req.query.stream as string) || "standalone-publisher";
+  const testDurationSec = parseInt(
+    (req.query.duration as string) || "240",
+    10,
+  );
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+
+  const result = await runStandaloneDeployImpactAnycable(
+    { n, rampPerSec, stream, testDurationSec },
+    cableUrl,
   );
   res.json(result);
 });
