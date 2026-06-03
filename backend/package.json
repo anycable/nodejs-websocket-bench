@@ -23,6 +23,7 @@
     "bench:avalanche:multi": "tsx src/bench/avalanche-multi.ts",
     "bench:deploy-impact:socketio-redis": "tsx src/bench/deploy-impact-socketio-redis.ts",
     "bench:deploy-impact:standalone-socketio": "tsx src/bench/deploy-impact-standalone-socketio.ts",
+    "bench:whispers": "tsx src/bench/whispers.ts",
     "bench:throughput:socketio": "tsx src/bench/throughput-socketio.ts",
     "bench:throughput:socketio-csr": "tsx src/bench/throughput-socketio-csr.ts",
     "bench:throughput:socketio-redis": "tsx src/bench/throughput-socketio-redis.ts",

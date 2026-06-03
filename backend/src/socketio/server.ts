@@ -80,6 +80,15 @@ io.on("connection", (socket) => {
     socket.join(stream);
   });
 
+  // Whisper: client emits "whisper" with (room, payload). Server forwards
+  // to all OTHER sockets in the room (sender excluded). This is how
+  // Socket.io emulates the "client-to-client without backend hop" pattern:
+  // the WS server is still in the path (no native peer-to-peer), but no
+  // app code runs. socket.to(room).emit broadcasts to room minus sender.
+  socket.on("whisper", (room: string, payload: unknown) => {
+    socket.to(room).emit("whisper", payload);
+  });
+
   socket.on("disconnect", () => {
     connectionCount--;
   });

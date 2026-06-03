@@ -28,6 +28,10 @@ import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
 import { runDeployImpactSocketio } from "../lib/deploy-impact-runner.js";
 import { runStandaloneDeployImpactSocketio } from "../lib/standalone-deploy-impact-runner.js";
 import { runStandaloneDeployImpactAnycable } from "../lib/standalone-deploy-impact-anycable-runner.js";
+import {
+  runWhispersAnycable,
+  runWhispersSocketio,
+} from "../lib/whispers-runner.js";
 import { runJitterUws } from "../lib/jitter-uws.js";
 import { runAvalancheUws } from "../lib/avalanche-uws.js";
 import {
@@ -344,6 +348,56 @@ app.post("/bench-deploy-impact-standalone-anycable", async (req, res) => {
   const result = await runStandaloneDeployImpactAnycable(
     { n, rampPerSec, stream, testDurationSec },
     cableUrl,
+  );
+  res.json(result);
+});
+
+// Whispers — client-to-client updates that bypass the backend (the
+// Liveblocks/Yjs/PartyKit category). AnyCable native uses channel.whisper
+// (anycable-go fans out without invoking app code). Socket.io emulates
+// via socket.to(room).emit(...) in a "whisper" handler on the server.
+// Query params:
+//   n=10000 rooms=100 ramp=200 interval=100 duration=30 payload=64
+app.post("/bench-whispers-anycable", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "1000", 10);
+  const rooms = parseInt((req.query.rooms as string) || "10", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "100", 10);
+  const whisperIntervalMs = parseInt(
+    (req.query.interval as string) || "100",
+    10,
+  );
+  const testDurationSec = parseInt(
+    (req.query.duration as string) || "30",
+    10,
+  );
+  const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+
+  const result = await runWhispersAnycable(
+    { n, rooms, rampPerSec, whisperIntervalMs, testDurationSec, payloadBytes },
+    cableUrl,
+  );
+  res.json(result);
+});
+
+app.post("/bench-whispers-socketio", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "1000", 10);
+  const rooms = parseInt((req.query.rooms as string) || "10", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "100", 10);
+  const whisperIntervalMs = parseInt(
+    (req.query.interval as string) || "100",
+    10,
+  );
+  const testDurationSec = parseInt(
+    (req.query.duration as string) || "30",
+    10,
+  );
+  const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
+  const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
+
+  const result = await runWhispersSocketio(
+    { n, rooms, rampPerSec, whisperIntervalMs, testDurationSec, payloadBytes },
+    { serverUrl },
   );
   res.json(result);
 });
