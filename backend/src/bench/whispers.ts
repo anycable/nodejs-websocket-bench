@@ -52,6 +52,13 @@ const qs = new URLSearchParams({
   payload: String(payloadBytes),
 });
 
+// Forward CABLE_URL (anycable variant) or SERVER_URL (socketio) or
+// WS_URL (uws) so the test can target a specific instance (e.g.
+// anycable-go-pro vs the default anycable-go).
+if (process.env.CABLE_URL) qs.set("cableUrl", process.env.CABLE_URL);
+if (process.env.SERVER_URL) qs.set("serverUrl", process.env.SERVER_URL);
+if (process.env.WS_URL) qs.set("wsUrl", process.env.WS_URL);
+
 const url = `${benchRunnerUrl}/bench-whispers-${protocol}?${qs.toString()}`;
 console.log(`POST ${url}\n`);
 

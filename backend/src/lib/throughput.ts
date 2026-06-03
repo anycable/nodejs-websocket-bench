@@ -120,6 +120,12 @@ async function waitForServerPublish(p: ThroughputParams) {
   await new Promise((r) => setTimeout(r, p.drainSec * 1000));
 }
 
+// External-publisher path returns once the publisher loop has finished
+// dispatching; just wait drainSec for stragglers.
+async function waitForServerPublishExternal(p: ThroughputParams) {
+  await new Promise((r) => setTimeout(r, p.drainSec * 1000));
+}
+
 // ---------------------------------------------------------------------------
 // AnyCable — publisher is the bench-runner (HTTP POST to /_broadcast),
 // matching the production deployment shape.
@@ -570,17 +576,35 @@ async function runSocketioCommon(
   console.log(`[${label}] all ramped; starting publisher`);
 
   const publishStart = Date.now();
-  const qs = new URLSearchParams({
-    total: String(p.totalMessages),
-    interval: String(p.intervalMs),
-    stream: p.stream,
-  });
-  try {
-    await fetch(`${urls.serverUrl}/publish-local?${qs.toString()}`, { method: "POST" });
-  } catch {
-    /* publish kickoff failure surfaces as zero deliveries */
+  const useHttpPublisher =
+    p.publisher === "pool" ||
+    p.publisher === "fireforget" ||
+    p.publisher === "serial";
+
+  if (useHttpPublisher) {
+    // External HTTP publisher: bench-runner POSTs to /_broadcast.
+    // This is the "standalone" shape — publisher is a separate process
+    // from the WS server.
+    console.log(`[${label}] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
+    await runSocketioRedisHttpPublisher(p, urls.serverUrl, p.publisher!);
+    await waitForServerPublishExternal(p);
+  } else {
+    // In-process publisher: kickoff /publish-local on the WS server,
+    // which runs its own emit loop. Same Node event loop as the WS
+    // fan-out.
+    console.log(`[${label}] publisher=in-process (/publish-local)`);
+    const qs = new URLSearchParams({
+      total: String(p.totalMessages),
+      interval: String(p.intervalMs),
+      stream: p.stream,
+    });
+    try {
+      await fetch(`${urls.serverUrl}/publish-local?${qs.toString()}`, { method: "POST" });
+    } catch {
+      /* publish kickoff failure surfaces as zero deliveries */
+    }
+    await waitForServerPublish(p);
   }
-  await waitForServerPublish(p);
   const publishingMs = Date.now() - publishStart - p.drainSec * 1000;
 
   for (const s of sockets) {
@@ -650,17 +674,29 @@ export async function runThroughputUws(
   console.log(`[tp-uws] all ramped; starting publisher`);
 
   const publishStart = Date.now();
-  const qs = new URLSearchParams({
-    total: String(p.totalMessages),
-    interval: String(p.intervalMs),
-    stream: p.stream,
-  });
-  try {
-    await fetch(`${urls.serverHttpUrl}/publish-local?${qs.toString()}`, { method: "POST" });
-  } catch {
-    /* */
+  const useHttpPublisher =
+    p.publisher === "pool" ||
+    p.publisher === "fireforget" ||
+    p.publisher === "serial";
+
+  if (useHttpPublisher) {
+    console.log(`[tp-uws] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
+    await runSocketioRedisHttpPublisher(p, urls.serverHttpUrl, p.publisher!);
+    await waitForServerPublishExternal(p);
+  } else {
+    console.log(`[tp-uws] publisher=in-process (/publish-local)`);
+    const qs = new URLSearchParams({
+      total: String(p.totalMessages),
+      interval: String(p.intervalMs),
+      stream: p.stream,
+    });
+    try {
+      await fetch(`${urls.serverHttpUrl}/publish-local?${qs.toString()}`, { method: "POST" });
+    } catch {
+      /* */
+    }
+    await waitForServerPublish(p);
   }
-  await waitForServerPublish(p);
   const publishingMs = Date.now() - publishStart - p.drainSec * 1000;
 
   for (const s of sockets) {
