@@ -130,10 +130,17 @@ console.log(`  output: ${outFile}\n`);
 // 2. Run publisher + hold for preDeploy seconds
 // 3. Hold postDeploy seconds for stragglers
 // 4. Return the result JSON
+// NODES_URLS: comma-separated WS node URLs forwarded to bench-runner so
+// it round-robins clients across them. Pair with RAILWAY_SERVICES so the
+// service names + URLs are aligned.
+const nodesUrlsParam = process.env.NODES_URLS
+  ? `&nodes=${encodeURIComponent(process.env.NODES_URLS)}`
+  : "";
+
 const url =
   `${benchRunnerUrl}/bench-deploy-impact-socketio` +
   `?n=${n}&ramp=${rampPerSec}&stream=${encodeURIComponent(stream)}` +
-  `&pubRate=${pubRate}&preDeploy=${preDeploy}&postDeploy=${postDeploy}`;
+  `&pubRate=${pubRate}&preDeploy=${preDeploy}&postDeploy=${postDeploy}${nodesUrlsParam}`;
 
 const benchPromise = (async () => {
   console.log(`POST ${url}`);
