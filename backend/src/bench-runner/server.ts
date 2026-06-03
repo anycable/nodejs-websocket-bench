@@ -5,16 +5,19 @@
 // side bottlenecks (NAT, dev-machine event loop) don't interfere with measuring
 // server capacity at 10K+ scale.
 //
-// Endpoints:
-//   POST /bench-jitter-anycable
-//   POST /bench-jitter-socketio
-//   POST /bench-jitter-socketio-csr
-//
-// Each runs synchronously and returns the full JitterResult JSON. Use a long
-// `curl --max-time` when triggering. Console output is also captured by Railway.
+// Two modes per POST endpoint:
+//   - sync (default):  blocks until the test finishes, returns the full result.
+//                      Best for short tests; Railway's edge proxy caps at 5 min.
+//   - async (?async=1): returns 202 {jobId} immediately, work continues in
+//                      background. Poll GET /jobs/:id for {status, result?, logTail}.
+//                      Use this for any test that may run longer than 5 min,
+//                      and for multi-shard coordination (driver fans out k jobs
+//                      and joins their results).
 
 import express from "express";
 import { spawn } from "node:child_process";
+
+import { getJob, startJob } from "../lib/job-queue.js";
 
 import { paramsFromQuery } from "../lib/params.js";
 import {
@@ -90,18 +93,65 @@ app.get("/health", (_req, res) =>
   })
 );
 
+// Wrap each handler in this so we get both modes for free. `?async=1`
+// switches the response to 202 {jobId} + background execution; without
+// it the endpoint behaves identically to before this change.
+async function respondAsync<T>(
+  req: express.Request,
+  res: express.Response,
+  run: () => Promise<T>,
+): Promise<void> {
+  if (req.query.async === "1") {
+    const jobId = startJob(run);
+    res.status(202).json({ jobId });
+    return;
+  }
+  try {
+    const result = await run();
+    res.json(result);
+  } catch (err) {
+    res
+      .status(500)
+      .json({ error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// Polled by drivers. `?logLines=N` overrides the default tail size.
+app.get("/jobs/:id", (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) {
+    res.status(404).json({ error: "job not found" });
+    return;
+  }
+  const logLines = Math.min(
+    Math.max(parseInt((req.query.logLines as string) || "50", 10) || 50, 1),
+    500,
+  );
+  res.json({
+    id: job.id,
+    status: job.status,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    durationMs: (job.endedAt ?? Date.now()) - job.startedAt,
+    logTail: job.log.slice(-logLines),
+    result: job.result,
+    error: job.error,
+  });
+});
+
 // `?cableUrl=` and `?broadcastUrl=` override the defaults so we can target
 // either anycable-go (OSS) or anycable-go-pro within the same project.
 app.post("/bench-jitter-anycable", async (req, res) => {
   const params = paramsFromQuery(req);
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
   const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
-  const result = await runJitterAnycable(params, {
-    cableUrl,
-    broadcastUrl,
-    broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
-  });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runJitterAnycable(params, {
+      cableUrl,
+      broadcastUrl,
+      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+    }),
+  );
 });
 
 // Diagnostic-only: same disruption as /bench-jitter-anycable plus
@@ -114,28 +164,31 @@ app.post("/bench-jitter-anycable-traced", async (req, res) => {
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
   const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
   const traceSample = parseInt((req.query.traceSample as string) || "100", 10);
-  const result = await runJitterAnycableTraced(
-    params,
-    {
-      cableUrl,
-      broadcastUrl,
-      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
-    },
-    { traceSample }
+  await respondAsync(req, res, () =>
+    runJitterAnycableTraced(
+      params,
+      {
+        cableUrl,
+        broadcastUrl,
+        broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+      },
+      { traceSample },
+    ),
   );
-  res.json(result);
 });
 
 app.post("/bench-jitter-socketio", async (req, res) => {
   const params = paramsFromQuery(req);
-  const result = await runJitterSocketio(params, { serverUrl: SOCKETIO_URL });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runJitterSocketio(params, { serverUrl: SOCKETIO_URL }),
+  );
 });
 
 app.post("/bench-jitter-socketio-csr", async (req, res) => {
   const params = paramsFromQuery(req);
-  const result = await runJitterSocketioCsr(params, { serverUrl: SOCKETIO_URL });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runJitterSocketioCsr(params, { serverUrl: SOCKETIO_URL }),
+  );
 });
 
 // uWebSockets.js jitter — `?wsUrl=` and `?httpUrl=` override defaults so
@@ -145,11 +198,9 @@ app.post("/bench-jitter-uws", async (req, res) => {
   const params = paramsFromQuery(req);
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
   const httpUrl = (req.query.httpUrl as string) || UWS_HTTP_URL;
-  const result = await runJitterUws(params, {
-    serverWsUrl: wsUrl,
-    serverHttpUrl: httpUrl,
-  });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runJitterUws(params, { serverWsUrl: wsUrl, serverHttpUrl: httpUrl }),
+  );
 });
 
 // Synchronous idle-connection probe. To exceed the per-container outbound
@@ -167,12 +218,9 @@ app.post("/bench-idle-anycable", async (req, res) => {
   const shardLabel = (req.query.shard as string) || undefined;
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
 
-  const result = await runIdleAnycable(
-    { n, holdSec, rampPerSec, stream },
-    cableUrl,
-    shardLabel
+  await respondAsync(req, res, () =>
+    runIdleAnycable({ n, holdSec, rampPerSec, stream }, cableUrl, shardLabel),
   );
-  res.json(result);
 });
 
 // Socket.io idle probe — same shape as the AnyCable variant. Useful for
@@ -190,12 +238,9 @@ app.post("/bench-idle-socketio", async (req, res) => {
   const shardLabel = (req.query.shard as string) || undefined;
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
 
-  const result = await runIdleSocketio(
-    { n, holdSec, rampPerSec, stream },
-    serverUrl,
-    shardLabel
+  await respondAsync(req, res, () =>
+    runIdleSocketio({ n, holdSec, rampPerSec, stream }, serverUrl, shardLabel),
   );
-  res.json(result);
 });
 
 // uWebSockets.js idle probe — same shape as the anycable/socketio
@@ -208,12 +253,9 @@ app.post("/bench-idle-uws", async (req, res) => {
   const shardLabel = (req.query.shard as string) || undefined;
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
 
-  const result = await runIdleUws(
-    { n, holdSec, rampPerSec, stream },
-    wsUrl,
-    shardLabel
+  await respondAsync(req, res, () =>
+    runIdleUws({ n, holdSec, rampPerSec, stream }, wsUrl, shardLabel),
   );
-  res.json(result);
 });
 
 // Avalanche probe — connect N socket.io-client sockets, wait for an
@@ -233,11 +275,12 @@ app.post("/bench-avalanche-socketio", async (req, res) => {
   const stream = (req.query.stream as string) || "avalanche";
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
 
-  const result = await runAvalancheSocketio(
-    { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
-    serverUrl
+  await respondAsync(req, res, () =>
+    runAvalancheSocketio(
+      { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+      serverUrl,
+    ),
   );
-  res.json(result);
 });
 
 // Deploy-impact for clustered Socket.io + Redis adapter. Holds N clients
@@ -290,12 +333,13 @@ app.post("/bench-deploy-impact-socketio", async (req, res) => {
     }
   };
 
-  const result = await runDeployImpactSocketio(
-    { n, rampPerSec, stream, publishRatePerSec, preDeploySec, postDeploySec },
-    serverUrls,
-    publish,
+  await respondAsync(req, res, () =>
+    runDeployImpactSocketio(
+      { n, rampPerSec, stream, publishRatePerSec, preDeploySec, postDeploySec },
+      serverUrls,
+      publish,
+    ),
   );
-  res.json(result);
 });
 
 // Standalone deploy-impact (A2c-standalone). Holds N WS clients connected
@@ -324,11 +368,12 @@ app.post("/bench-deploy-impact-standalone-socketio", async (req, res) => {
     ? nodesParam.split(",").map((s) => s.trim()).filter(Boolean)
     : [SOCKETIO_URL];
 
-  const result = await runStandaloneDeployImpactSocketio(
-    { n, rampPerSec, stream, testDurationSec },
-    serverUrls,
+  await respondAsync(req, res, () =>
+    runStandaloneDeployImpactSocketio(
+      { n, rampPerSec, stream, testDurationSec },
+      serverUrls,
+    ),
   );
-  res.json(result);
 });
 
 // Standalone deploy-impact for AnyCable. Same shape as the Socket.io
@@ -346,11 +391,12 @@ app.post("/bench-deploy-impact-standalone-anycable", async (req, res) => {
   );
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
 
-  const result = await runStandaloneDeployImpactAnycable(
-    { n, rampPerSec, stream, testDurationSec },
-    cableUrl,
+  await respondAsync(req, res, () =>
+    runStandaloneDeployImpactAnycable(
+      { n, rampPerSec, stream, testDurationSec },
+      cableUrl,
+    ),
   );
-  res.json(result);
 });
 
 // Whispers — client-to-client updates that bypass the backend (the
@@ -374,11 +420,19 @@ app.post("/bench-whispers-anycable", async (req, res) => {
   const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
 
-  const result = await runWhispersAnycable(
-    { n, rooms, rampPerSec, whisperIntervalMs, testDurationSec, payloadBytes },
-    cableUrl,
+  await respondAsync(req, res, () =>
+    runWhispersAnycable(
+      {
+        n,
+        rooms,
+        rampPerSec,
+        whisperIntervalMs,
+        testDurationSec,
+        payloadBytes,
+      },
+      cableUrl,
+    ),
   );
-  res.json(result);
 });
 
 app.post("/bench-whispers-socketio", async (req, res) => {
@@ -396,11 +450,19 @@ app.post("/bench-whispers-socketio", async (req, res) => {
   const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
 
-  const result = await runWhispersSocketio(
-    { n, rooms, rampPerSec, whisperIntervalMs, testDurationSec, payloadBytes },
-    { serverUrl },
+  await respondAsync(req, res, () =>
+    runWhispersSocketio(
+      {
+        n,
+        rooms,
+        rampPerSec,
+        whisperIntervalMs,
+        testDurationSec,
+        payloadBytes,
+      },
+      { serverUrl },
+    ),
   );
-  res.json(result);
 });
 
 app.post("/bench-whispers-uws", async (req, res) => {
@@ -418,11 +480,19 @@ app.post("/bench-whispers-uws", async (req, res) => {
   const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
   const serverWsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
 
-  const result = await runWhispersUws(
-    { n, rooms, rampPerSec, whisperIntervalMs, testDurationSec, payloadBytes },
-    { serverWsUrl },
+  await respondAsync(req, res, () =>
+    runWhispersUws(
+      {
+        n,
+        rooms,
+        rampPerSec,
+        whisperIntervalMs,
+        testDurationSec,
+        payloadBytes,
+      },
+      { serverWsUrl },
+    ),
   );
-  res.json(result);
 });
 
 // uWebSockets.js avalanche — same shape and methodology as the Socket.io
@@ -439,11 +509,12 @@ app.post("/bench-avalanche-uws", async (req, res) => {
   const stream = (req.query.stream as string) || "avalanche-uws";
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
 
-  const result = await runAvalancheUws(
-    { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
-    wsUrl
+  await respondAsync(req, res, () =>
+    runAvalancheUws(
+      { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+      wsUrl,
+    ),
   );
-  res.json(result);
 });
 
 // ---------------------------------------------------------------------------
@@ -475,28 +546,31 @@ app.post("/bench-throughput-anycable", async (req, res) => {
   const natsUrl = (req.query.natsUrl as string) || ANYCABLE_NATS_URL || undefined;
   const natsSubject =
     (req.query.natsSubject as string) || ANYCABLE_NATS_SUBJECT || undefined;
-  const result = await runThroughputAnycable(params, {
-    cableUrl,
-    broadcastUrl,
-    broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
-    natsUrl,
-    natsSubject,
-  });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runThroughputAnycable(params, {
+      cableUrl,
+      broadcastUrl,
+      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+      natsUrl,
+      natsSubject,
+    }),
+  );
 });
 
 app.post("/bench-throughput-socketio", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-sio-${Date.now()}`);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-  const result = await runThroughputSocketio(params, { serverUrl });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runThroughputSocketio(params, { serverUrl }),
+  );
 });
 
 app.post("/bench-throughput-socketio-csr", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-csr-${Date.now()}`);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-  const result = await runThroughputSocketioCsr(params, { serverUrl });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runThroughputSocketioCsr(params, { serverUrl }),
+  );
 });
 
 // AnyCable cluster — 2 anycable-go instances behind shared NATS. Clients
@@ -511,15 +585,16 @@ app.post("/bench-throughput-anycable-cluster", async (req, res) => {
   const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_CLUSTER_BROADCAST_URL;
   const natsUrl = (req.query.natsUrl as string) || ANYCABLE_CLUSTER_NATS_URL || undefined;
   const natsSubject = (req.query.natsSubject as string) || undefined;
-  const result = await runThroughputAnycableCluster(params, {
-    cableUrlA,
-    cableUrlB,
-    broadcastUrl,
-    broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
-    natsUrl,
-    natsSubject,
-  });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runThroughputAnycableCluster(params, {
+      cableUrlA,
+      cableUrlB,
+      broadcastUrl,
+      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+      natsUrl,
+      natsSubject,
+    }),
+  );
 });
 
 // Socket.io with Redis adapter — clients split 50/50 across two instances
@@ -532,22 +607,21 @@ app.post("/bench-throughput-socketio-redis", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-redis-${Date.now()}`);
   const subscriberUrlA = (req.query.subscriberUrlA as string) || SOCKETIO_REDIS_URL_A;
   const subscriberUrlB = (req.query.subscriberUrlB as string) || SOCKETIO_REDIS_URL_B;
-  const result = await runThroughputSocketioRedis(params, {
-    subscriberUrlA,
-    subscriberUrlB,
-  });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runThroughputSocketioRedis(params, { subscriberUrlA, subscriberUrlB }),
+  );
 });
 
 app.post("/bench-throughput-uws", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-uws-${Date.now()}`);
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
   const httpUrl = (req.query.httpUrl as string) || UWS_HTTP_URL;
-  const result = await runThroughputUws(params, {
-    serverWsUrl: wsUrl,
-    serverHttpUrl: httpUrl,
-  });
-  res.json(result);
+  await respondAsync(req, res, () =>
+    runThroughputUws(params, {
+      serverWsUrl: wsUrl,
+      serverHttpUrl: httpUrl,
+    }),
+  );
 });
 
 // Run Vladimir's stress_publications benchi binary baked into the image
@@ -578,37 +652,46 @@ app.post("/bench-benchi-anycable", async (req, res) => {
     if (value) { args.push(`--${flag}`, value); }
   }
 
-  const startedAt = Date.now();
-  console.log(`[benchi] stress_publications ${args.join(" ")}`);
-  const child = spawn("stress_publications", args);
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => { stdout += chunk; });
-  child.stderr.on("data", (chunk) => { stderr += chunk; });
-
-  child.on("close", (code) => {
-    const elapsedMs = Date.now() - startedAt;
-    // Parse key=value lines from stdout into a flat object.
-    const result: Record<string, number | string> = {};
-    for (const line of stdout.split("\n")) {
-      const eq = line.indexOf("=");
-      if (eq === -1) continue;
-      const key = line.slice(0, eq).trim();
-      const raw = line.slice(eq + 1).trim();
-      const num = Number(raw);
-      result[key] = Number.isFinite(num) && raw !== "" ? num : raw;
-    }
-    result.exitCode = code ?? -1;
-    result.elapsedMs = elapsedMs;
-    result.args = args.join(" ");
-    if (stderr) result.stderr = stderr.slice(-1000);
-    console.log(`[benchi] done in ${elapsedMs}ms (exit=${code}) max=${result.throughput_max_msgs_per_sec} short=${result.clients_short}`);
-    res.json(result);
-  });
-  child.on("error", (err) => {
-    console.error(`[benchi] spawn error: ${err.message}`);
-    res.status(500).json({ error: err.message, stderr });
-  });
+  await respondAsync(req, res, () =>
+    new Promise<Record<string, number | string>>((resolve, reject) => {
+      const startedAt = Date.now();
+      console.log(`[benchi] stress_publications ${args.join(" ")}`);
+      const child = spawn("stress_publications", args);
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("close", (code) => {
+        const elapsedMs = Date.now() - startedAt;
+        // Parse key=value lines from stdout into a flat object.
+        const result: Record<string, number | string> = {};
+        for (const line of stdout.split("\n")) {
+          const eq = line.indexOf("=");
+          if (eq === -1) continue;
+          const key = line.slice(0, eq).trim();
+          const raw = line.slice(eq + 1).trim();
+          const num = Number(raw);
+          result[key] = Number.isFinite(num) && raw !== "" ? num : raw;
+        }
+        result.exitCode = code ?? -1;
+        result.elapsedMs = elapsedMs;
+        result.args = args.join(" ");
+        if (stderr) result.stderr = stderr.slice(-1000);
+        console.log(
+          `[benchi] done in ${elapsedMs}ms (exit=${code}) max=${result.throughput_max_msgs_per_sec} short=${result.clients_short}`,
+        );
+        resolve(result);
+      });
+      child.on("error", (err) => {
+        console.error(`[benchi] spawn error: ${err.message}`);
+        reject(err);
+      });
+    }),
+  );
 });
 
 const port = parseInt(process.env.PORT || "3001", 10);

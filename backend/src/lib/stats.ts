@@ -77,6 +77,11 @@ export interface JitterResult {
   };
   latencySamples: number;
   runnerPeakRssMb: number;
+  // Optional downsampled sorted latency samples. Set when summarize was
+  // called with `samplesCap`. Used by the multi-shard coordinator to
+  // recompute true merged percentiles across shards without shipping
+  // every raw latency over the wire.
+  latencySamplesSorted?: number[];
 }
 
 export interface SummarizeOptions {
@@ -85,6 +90,24 @@ export interface SummarizeOptions {
   stats: ClientStat[];
   elapsedMs: number;
   peakRssMb?: number;
+  // When set, include up to `samplesCap` sorted latency samples in the
+  // result for downstream merging. Linear-interpolated downsample —
+  // preserves min, max, and quantile structure. Default off.
+  samplesCap?: number;
+}
+
+// Downsample a sorted ascending array to at most `cap` evenly-spaced
+// elements. Preserves first and last; reduces a 2.5M-sample shard payload
+// to ~5K with negligible loss at p99 for typical bench distributions.
+export function downsampleSorted(sortedAsc: number[], cap: number): number[] {
+  if (cap <= 0 || sortedAsc.length === 0) return [];
+  if (sortedAsc.length <= cap) return [...sortedAsc];
+  const out: number[] = new Array(cap);
+  for (let i = 0; i < cap; i++) {
+    const idx = Math.round((i * (sortedAsc.length - 1)) / (cap - 1));
+    out[i] = sortedAsc[idx];
+  }
+  return out;
 }
 
 export function summarize(opts: SummarizeOptions): JitterResult {
@@ -121,6 +144,10 @@ export function summarize(opts: SummarizeOptions): JitterResult {
       ? Math.round(opts.peakRssMb)
       : Math.round(process.memoryUsage().rss / 1024 / 1024);
 
+  const latencySamplesSorted = opts.samplesCap
+    ? downsampleSorted(allLatencies, opts.samplesCap)
+    : undefined;
+
   return {
     label,
     elapsedMs,
@@ -153,6 +180,111 @@ export function summarize(opts: SummarizeOptions): JitterResult {
     },
     latencySamples: allLatencies.length,
     runnerPeakRssMb: peakRssMb,
+    latencySamplesSorted,
+  };
+}
+
+// Merge JitterResults from multiple shards into one aggregate result.
+// Sums per-shard counts; recomputes latency percentiles from the union of
+// per-shard latencySamplesSorted (so the merged percentiles reflect the
+// true distribution across all clients, not a per-shard average).
+//
+// Requires every input to have been produced with `samplesCap` set — if
+// any is missing the sorted samples, this throws rather than silently
+// returning misleading per-shard-average percentiles.
+export function mergeJitterResults(
+  label: string,
+  shards: JitterResult[],
+): JitterResult {
+  if (shards.length === 0) {
+    throw new Error("mergeJitterResults: empty shard list");
+  }
+  for (const s of shards) {
+    if (!s.latencySamplesSorted) {
+      throw new Error(
+        `mergeJitterResults: shard "${s.label}" missing latencySamplesSorted (rerun with samplesCap)`,
+      );
+    }
+  }
+
+  const clients = shards.reduce((sum, s) => sum + s.clients, 0);
+  const publishedMessages = shards.reduce(
+    (max, s) => Math.max(max, s.publishedMessages),
+    0,
+  );
+  const expectedDeliveries = shards.reduce(
+    (sum, s) => sum + s.expectedDeliveries,
+    0,
+  );
+  const receivedDeliveries = shards.reduce(
+    (sum, s) => sum + s.receivedDeliveries,
+    0,
+  );
+  const lostDeliveries = shards.reduce((sum, s) => sum + s.lostDeliveries, 0);
+  const jitterEvents = shards.reduce((sum, s) => sum + s.jitterEvents, 0);
+  const csrResumes = shards.reduce((sum, s) => sum + s.csrResumes, 0);
+  const connectFailures = shards.reduce(
+    (sum, s) => sum + s.connectFailures,
+    0,
+  );
+  const elapsedMs = shards.reduce((max, s) => Math.max(max, s.elapsedMs), 0);
+  const runnerPeakRssMb = shards.reduce(
+    (max, s) => Math.max(max, s.runnerPeakRssMb),
+    0,
+  );
+  const latencySamples = shards.reduce((sum, s) => sum + s.latencySamples, 0);
+
+  // Concat all per-shard sorted samples, resort, recompute percentiles.
+  // Each shard already contains a representative downsample (linear-
+  // interpolated). Merging preserves the union shape because shard
+  // samples are independently sampled from their own distribution.
+  const merged: number[] = [];
+  for (const s of shards) {
+    for (const v of s.latencySamplesSorted!) merged.push(v);
+  }
+  merged.sort((a, b) => a - b);
+  const lmin = merged.length > 0 ? merged[0] : 0;
+  const norm = merged.map((v) => v - lmin);
+
+  const deliveryRate =
+    expectedDeliveries > 0 ? (receivedDeliveries / expectedDeliveries) * 100 : 0;
+
+  return {
+    label,
+    elapsedMs,
+    clients,
+    publishedMessages,
+    expectedDeliveries,
+    receivedDeliveries,
+    lostDeliveries,
+    deliveryRatePct: Number(deliveryRate.toFixed(2)),
+    jitterEvents,
+    avgJittersPerClient: Number(
+      (jitterEvents / Math.max(1, clients)).toFixed(1),
+    ),
+    csrResumes,
+    csrResumeRatePct:
+      jitterEvents > 0
+        ? Number(((csrResumes / jitterEvents) * 100).toFixed(1))
+        : null,
+    connectFailures,
+    latencyRawMs: {
+      avg: avg(merged),
+      p50: percentile(merged, 50),
+      p95: percentile(merged, 95),
+      p99: percentile(merged, 99),
+      max: percentile(merged, 100),
+    },
+    latencyOverMinMs: {
+      avg: avg(norm),
+      p50: percentile(norm, 50),
+      p95: percentile(norm, 95),
+      p99: percentile(norm, 99),
+      max: percentile(norm, 100),
+      skewFloor: lmin,
+    },
+    latencySamples,
+    runnerPeakRssMb,
   };
 }
 

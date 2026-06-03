@@ -272,6 +272,7 @@ export async function runJitterUws(
     stats,
     elapsedMs: Date.now() - startedAt,
     peakRssMb,
+    samplesCap: p.samplesCap,
   });
   console.log(`[jitter-uws] result: ${JSON.stringify(result)}`);
   return result;

@@ -24,3 +24,14 @@ anycable-go-darwin-*
 anycable-go-windows-*
 anycable-go-mrb-*
 anycable-thruster-*
+.gstack/
+
+# Scratch result JSONs from local bench-runner driver invocations.
+backend/jitter-multi-*.json
+backend/whispers-*.json
+backend/deploy-impact-*.json
+
+# Ad-hoc sweep scripts; the manifest in src/bench/tests-manifest.ts is canonical.
+.standalone-throughput-sweep.sh
+.latency-sweep.sh
+.csr-test-queue.sh

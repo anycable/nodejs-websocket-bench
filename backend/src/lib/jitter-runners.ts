@@ -219,6 +219,7 @@ export async function runJitterAnycable(
     stats,
     elapsedMs: Date.now() - startedAt,
     peakRssMb,
+    samplesCap: p.samplesCap,
   });
   console.log(`[jitter-ac] result: ${JSON.stringify(result)}`);
   return result;
@@ -330,6 +331,7 @@ export async function runJitterSocketio(
     stats,
     elapsedMs: Date.now() - startedAt,
     peakRssMb,
+    samplesCap: p.samplesCap,
   });
   console.log(`[jitter-sio] result: ${JSON.stringify(result)}`);
   return result;
@@ -415,6 +417,7 @@ export async function runJitterSocketioCsr(
     stats,
     elapsedMs: Date.now() - startedAt,
     peakRssMb,
+    samplesCap: p.samplesCap,
   });
   console.log(`[jitter-csr] result: ${JSON.stringify(result)}`);
   return result;

@@ -20,6 +20,8 @@
     "bench:avalanche:anycable": "tsx src/bench/avalanche-anycable.ts",
     "bench:avalanche:uws": "tsx src/bench/avalanche-railway-uws.ts",
     "bench:idle:multi": "tsx src/bench/idle-multi.ts",
+    "bench:jitter:multi": "tsx src/bench/jitter-multi.ts",
+    "bench:rebaseline": "tsx src/bench/rebaseline.ts",
     "bench:avalanche:multi": "tsx src/bench/avalanche-multi.ts",
     "bench:deploy-impact:socketio-redis": "tsx src/bench/deploy-impact-socketio-redis.ts",
     "bench:deploy-impact:standalone-socketio": "tsx src/bench/deploy-impact-standalone-socketio.ts",

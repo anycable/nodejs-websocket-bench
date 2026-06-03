@@ -1,0 +1,270 @@
+// Walk the tests manifest, run each against bench-runner, write JSON, and
+// print a delta-vs-baseline report.
+//
+// Usage:
+//   BENCH_RUNNER_URL=https://bench-runner-production.up.railway.app \
+//     npm run bench:rebaseline
+//
+//   FILTER=latency-anycable      # only matching IDs
+//   FILTER=jitter,whispers       # comma-separated category match
+//   DRY_RUN=1                    # print plan, don't hit the network
+//   OUTPUT_DIR=tmp/v1.6.14-bench-results  # JSON output (default)
+//
+// What lands per test:
+//   - `${OUTPUT_DIR}/${id}.json`  the raw bench-runner result
+//   - A line in the terminal showing baseline → current with % drift
+//   - Color: green within threshold, yellow above, red if delivery dropped
+//
+// Exit code 1 if any test regressed (drift > threshold OR deliveryRate < 99).
+
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { Agent, setGlobalDispatcher } from "undici";
+
+import { tests, type TestSpec } from "./tests-manifest.js";
+
+// Each test enqueue + poll cycle is fast; the long wait is on the server.
+// Pad timeouts so a slow Railway moment doesn't lose a result.
+setGlobalDispatcher(
+  new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 }),
+);
+
+const benchRunnerDefault = process.env.BENCH_RUNNER_URL;
+if (!benchRunnerDefault) {
+  console.error("BENCH_RUNNER_URL is required (default bench-runner base URL)");
+  process.exit(1);
+}
+
+const filter = (process.env.FILTER || "").trim();
+const dryRun = process.env.DRY_RUN === "1";
+const outputDir =
+  process.env.OUTPUT_DIR || join(process.cwd(), "..", "..", "tmp", "v1.6.14-bench-results");
+
+// Color helpers. Off when stdout isn't a TTY (CI, pipes) so the report
+// stays grep-friendly. Use ANSI directly; no chalk dep needed.
+const useColor = process.stdout.isTTY === true;
+const c = {
+  reset: useColor ? "\x1b[0m" : "",
+  bold: useColor ? "\x1b[1m" : "",
+  dim: useColor ? "\x1b[2m" : "",
+  green: useColor ? "\x1b[32m" : "",
+  yellow: useColor ? "\x1b[33m" : "",
+  red: useColor ? "\x1b[31m" : "",
+  cyan: useColor ? "\x1b[36m" : "",
+};
+
+// FILTER matches when its value is a substring of the id OR a comma-
+// separated category. Empty filter = run everything.
+function matchesFilter(spec: TestSpec): boolean {
+  if (!filter) return true;
+  const parts = filter
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  for (const p of parts) {
+    if (spec.id.toLowerCase().includes(p)) return true;
+    if (spec.category === p) return true;
+  }
+  return false;
+}
+
+const selected = tests.filter(matchesFilter);
+if (selected.length === 0) {
+  console.error(`No tests matched FILTER="${filter}"`);
+  process.exit(1);
+}
+
+if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+
+console.log(
+  `${c.bold}Rebaselining ${selected.length} test(s)${c.reset}${
+    filter ? ` (filter="${filter}")` : ""
+  }`,
+);
+console.log(`Default bench-runner: ${benchRunnerDefault}`);
+console.log(`Output dir:           ${outputDir}\n`);
+
+if (dryRun) {
+  console.log(`${c.dim}-- DRY_RUN: showing plan, not running --${c.reset}\n`);
+  for (const t of selected) {
+    console.log(`  ${t.id}  (${t.category}, ${t.mode})  →  ${t.endpoint}`);
+  }
+  process.exit(0);
+}
+
+interface DeltaRow {
+  field: string;
+  baseline: number | string;
+  current: number | string | undefined;
+  deltaPct?: number;
+  status: "ok" | "drift" | "regress" | "missing";
+}
+
+// Extract a dotted path from a nested object: "latencyRawMs.p99" → result.latencyRawMs.p99.
+function readPath(obj: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((acc, key) => {
+    if (acc && typeof acc === "object" && key in (acc as Record<string, unknown>)) {
+      return (acc as Record<string, unknown>)[key];
+    }
+    return undefined;
+  }, obj);
+}
+
+function classify(spec: TestSpec, field: string, baseline: unknown, current: unknown): DeltaRow {
+  const baseStr = typeof baseline === "number" ? baseline : String(baseline);
+  const curStr = current === undefined ? undefined : typeof current === "number" ? current : String(current);
+
+  if (current === undefined || current === null) {
+    return { field, baseline: baseStr, current: curStr, status: "missing" };
+  }
+  if (typeof baseline === "number" && typeof current === "number" && baseline > 0) {
+    const deltaPct = ((current - baseline) / baseline) * 100;
+    const threshold = spec.driftThresholdPct ?? 5;
+    // deliveryRate is special: dropping is bad, but rising is fine.
+    if (field === "deliveryRatePct" && current < baseline - 1) {
+      return { field, baseline: baseStr, current: curStr, deltaPct, status: "regress" };
+    }
+    const status: DeltaRow["status"] =
+      Math.abs(deltaPct) <= threshold ? "ok" : "drift";
+    return { field, baseline: baseStr, current: curStr, deltaPct, status };
+  }
+  // Non-numeric: just compare strings.
+  const ok = String(baseline) === String(current);
+  return { field, baseline: baseStr, current: curStr, status: ok ? "ok" : "drift" };
+}
+
+function formatDelta(row: DeltaRow): string {
+  const tag =
+    row.status === "ok"
+      ? `${c.green}ok${c.reset}     `
+      : row.status === "drift"
+        ? `${c.yellow}drift${c.reset}  `
+        : row.status === "regress"
+          ? `${c.red}regress${c.reset}`
+          : `${c.dim}missing${c.reset}`;
+  const pct =
+    row.deltaPct === undefined
+      ? ""
+      : ` (${row.deltaPct >= 0 ? "+" : ""}${row.deltaPct.toFixed(1)}%)`;
+  return `      ${tag}  ${row.field.padEnd(28)}  ${String(row.baseline).padStart(10)} → ${String(row.current ?? "n/a").padStart(10)}${pct}`;
+}
+
+// Enqueue + (poll if async). Returns the raw result JSON.
+async function runTest(spec: TestSpec, baseUrl: string): Promise<unknown> {
+  const qs = new URLSearchParams();
+  if (spec.mode === "async") qs.set("async", "1");
+  for (const [k, v] of Object.entries(spec.params)) qs.set(k, String(v));
+  const url = `${baseUrl}/${spec.endpoint}?${qs.toString()}`;
+
+  const res = await fetch(url, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`enqueue HTTP ${res.status} ${res.statusText}`);
+  }
+  const body = (await res.json()) as Record<string, unknown>;
+
+  if (spec.mode === "sync") return body;
+
+  const jobId = body.jobId as string | undefined;
+  if (!jobId) throw new Error("async response missing jobId");
+
+  // Poll. Cap roughly at 30 min; almost everything is well under that.
+  const deadline = Date.now() + 30 * 60 * 1000;
+  let lastLog = "";
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const pollRes = await fetch(`${baseUrl}/jobs/${jobId}?logLines=10`);
+    if (!pollRes.ok) {
+      // Transient HTTP errors during a long bench shouldn't kill the run.
+      continue;
+    }
+    const poll = (await pollRes.json()) as {
+      status: string;
+      result?: unknown;
+      error?: string;
+      logTail?: string[];
+      durationMs?: number;
+    };
+    if (poll.logTail && poll.logTail.length > 0) {
+      const newest = poll.logTail[poll.logTail.length - 1];
+      if (newest && newest !== lastLog) {
+        process.stdout.write(`      ${c.dim}${newest.slice(0, 80)}${c.reset}\n`);
+        lastLog = newest;
+      }
+    }
+    if (poll.status === "done") return poll.result;
+    if (poll.status === "failed") throw new Error(poll.error || "job failed");
+  }
+  throw new Error("poll timed out after 30 min");
+}
+
+const startedAt = new Date();
+let okCount = 0;
+let driftCount = 0;
+let regressCount = 0;
+const failures: { spec: TestSpec; error: string }[] = [];
+
+for (const spec of selected) {
+  const baseUrl = spec.benchRunner || benchRunnerDefault;
+  const startedMs = Date.now();
+  console.log(
+    `${c.cyan}▶${c.reset} ${c.bold}${spec.id}${c.reset}  ${c.dim}${spec.category}/${spec.mode} via ${spec.endpoint}${c.reset}`,
+  );
+  try {
+    const result = await runTest(spec, baseUrl);
+    const elapsed = ((Date.now() - startedMs) / 1000).toFixed(1);
+
+    // Write raw result to disk.
+    const outPath = join(outputDir, `${spec.id}.json`);
+    writeFileSync(outPath, JSON.stringify(result, null, 2));
+
+    // Compute deltas vs baseline.
+    const rows: DeltaRow[] = [];
+    let testRegressed = false;
+    let testDrifted = false;
+    for (const [field, base] of Object.entries(spec.baseline)) {
+      const current = readPath(result, field);
+      const row = classify(spec, field, base, current);
+      rows.push(row);
+      if (row.status === "regress") testRegressed = true;
+      if (row.status === "drift") testDrifted = true;
+    }
+
+    const summary =
+      testRegressed
+        ? `${c.red}REGRESS${c.reset}`
+        : testDrifted
+          ? `${c.yellow}drift${c.reset}`
+          : `${c.green}ok${c.reset}`;
+    console.log(`      ${summary}  ${elapsed}s  →  ${outPath}`);
+    for (const row of rows) console.log(formatDelta(row));
+
+    if (testRegressed) regressCount++;
+    else if (testDrifted) driftCount++;
+    else okCount++;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`      ${c.red}FAILED${c.reset}  ${msg}`);
+    failures.push({ spec, error: msg });
+  }
+  console.log("");
+}
+
+const endedAt = new Date();
+const totalSec = ((endedAt.getTime() - startedAt.getTime()) / 1000).toFixed(1);
+
+console.log(`${c.bold}=== Summary ===${c.reset}`);
+console.log(
+  `  ${c.green}ok:${c.reset}      ${okCount}` +
+    `  ${c.yellow}drift:${c.reset}  ${driftCount}` +
+    `  ${c.red}regress:${c.reset} ${regressCount}` +
+    `  ${c.red}failed:${c.reset} ${failures.length}` +
+    `  total: ${selected.length}`,
+);
+console.log(`  elapsed: ${totalSec}s`);
+if (failures.length > 0) {
+  console.log(`\n${c.red}Failures:${c.reset}`);
+  for (const f of failures) console.log(`  ${f.spec.id}: ${f.error}`);
+}
+
+// Exit non-zero only on regression or hard failure.
+process.exit(regressCount > 0 || failures.length > 0 ? 1 : 0);

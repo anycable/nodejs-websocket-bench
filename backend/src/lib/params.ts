@@ -13,6 +13,10 @@ export interface JitterParams {
   intervalMs: number;
   rampPerSec: number;
   stream: string;
+  // When set, the runner includes a downsampled sorted latency-samples
+  // array in the result. The multi-shard coordinator turns this on so
+  // it can recompute true merged percentiles across shards.
+  samplesCap?: number;
 }
 
 const DEFAULT_LOCAL: JitterParams = {
@@ -45,6 +49,7 @@ function intEnv(name: string, fallback: number): number {
 }
 
 export function paramsFromEnv(): JitterParams {
+  const samplesCapEnv = parseInt(process.env.SAMPLES_CAP || "", 10);
   return {
     n: intEnv("NUM_CLIENTS", DEFAULT_LOCAL.n),
     durationSec: intEnv("DURATION", DEFAULT_LOCAL.durationSec),
@@ -54,6 +59,9 @@ export function paramsFromEnv(): JitterParams {
     intervalMs: intEnv("INTERVAL_MS", DEFAULT_LOCAL.intervalMs),
     rampPerSec: intEnv("RAMP_RATE", DEFAULT_LOCAL.rampPerSec),
     stream: process.env.STREAM || DEFAULT_LOCAL.stream,
+    samplesCap: Number.isFinite(samplesCapEnv) && samplesCapEnv > 0
+      ? samplesCapEnv
+      : undefined,
   };
 }
 
@@ -68,6 +76,7 @@ export function paramsFromQuery(req: Request): JitterParams {
   const stream = typeof req.query.stream === "string"
     ? req.query.stream
     : `bench-${Date.now()}`;
+  const samplesCap = intQuery(req, "samplesCap", 0);
   return {
     n: intQuery(req, "n", DEFAULT_RUNNER.n),
     durationSec: intQuery(req, "duration", DEFAULT_RUNNER.durationSec),
@@ -77,5 +86,6 @@ export function paramsFromQuery(req: Request): JitterParams {
     intervalMs: intQuery(req, "interval", DEFAULT_RUNNER.intervalMs),
     rampPerSec: intQuery(req, "ramp", DEFAULT_RUNNER.rampPerSec),
     stream,
+    samplesCap: samplesCap > 0 ? samplesCap : undefined,
   };
 }
