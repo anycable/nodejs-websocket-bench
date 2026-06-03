@@ -1,0 +1,34 @@
+{
+  "clients": 10000,
+  "initiallyConnected": 3333,
+  "totalPublishedMsgs": 592,
+  "expectedDeliveries": 1973136,
+  "totalReceivedMsgs": 0,
+  "deliveryRatePct": 0,
+  "affectedClients": 3333,
+  "gapMs": {
+    "p50": 827,
+    "p95": 1027,
+    "p99": 1886,
+    "max": 1990
+  },
+  "msgsLostPerClient": {
+    "p50": 2,
+    "p95": 2,
+    "p99": 4,
+    "max": 4
+  },
+  "totalMsgsLost": 5917,
+  "reconnectedCount": 3333,
+  "reconnectRatePct": 100,
+  "reconnectMs": {
+    "p50": 827,
+    "p95": 1027,
+    "p99": 1886,
+    "max": 1990
+  },
+  "firstDisconnectAt": 1780470264262,
+  "fullReconnectTimeMs": 1146,
+  "rampElapsedMs": 55498,
+  "totalElapsedMs": 356747
+}

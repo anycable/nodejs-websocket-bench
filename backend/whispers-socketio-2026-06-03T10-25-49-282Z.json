@@ -1,0 +1,18 @@
+{
+  "protocol": "socketio",
+  "n": 1000,
+  "rooms": 10,
+  "initiallyConnected": 1000,
+  "whisperIntervalMs": 500,
+  "whispersSent": 29960,
+  "whispersReceived": 1901530,
+  "expectedReceived": 2966040,
+  "deliveryRatePct": 64.11,
+  "latencyMs": {
+    "p50": 2240,
+    "p95": 7664,
+    "p99": 9743,
+    "max": 12570
+  },
+  "totalElapsedMs": 34303
+}

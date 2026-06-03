@@ -1,0 +1,18 @@
+{
+  "clients": 10000,
+  "initiallyConnected": 10000,
+  "affectedClients": 10000,
+  "reconnectedCount": 10000,
+  "reconnectMs": {
+    "p50": 2766,
+    "p95": 3545,
+    "p99": 3667,
+    "max": 3918
+  },
+  "longestGapMs": 2900,
+  "publisherDowntimeEstSec": 2.9,
+  "totalReceivedMsgs": 1072419,
+  "uniqueMessagesReceived": 132,
+  "rampElapsedMs": 77016,
+  "totalElapsedMs": 319479
+}

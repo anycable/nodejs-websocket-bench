@@ -31,6 +31,7 @@ import { runStandaloneDeployImpactAnycable } from "../lib/standalone-deploy-impa
 import {
   runWhispersAnycable,
   runWhispersSocketio,
+  runWhispersUws,
 } from "../lib/whispers-runner.js";
 import { runJitterUws } from "../lib/jitter-uws.js";
 import { runAvalancheUws } from "../lib/avalanche-uws.js";
@@ -398,6 +399,28 @@ app.post("/bench-whispers-socketio", async (req, res) => {
   const result = await runWhispersSocketio(
     { n, rooms, rampPerSec, whisperIntervalMs, testDurationSec, payloadBytes },
     { serverUrl },
+  );
+  res.json(result);
+});
+
+app.post("/bench-whispers-uws", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "1000", 10);
+  const rooms = parseInt((req.query.rooms as string) || "10", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "100", 10);
+  const whisperIntervalMs = parseInt(
+    (req.query.interval as string) || "100",
+    10,
+  );
+  const testDurationSec = parseInt(
+    (req.query.duration as string) || "30",
+    10,
+  );
+  const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
+  const serverWsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
+
+  const result = await runWhispersUws(
+    { n, rooms, rampPerSec, whisperIntervalMs, testDurationSec, payloadBytes },
+    { serverWsUrl },
   );
   res.json(result);
 });

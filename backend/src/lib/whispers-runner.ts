@@ -32,7 +32,7 @@ export interface WhispersParams {
 }
 
 export interface WhispersResult {
-  protocol: "anycable" | "socketio";
+  protocol: "anycable" | "socketio" | "uws";
   n: number;
   rooms: number;
   initiallyConnected: number;
@@ -269,11 +269,132 @@ export async function runWhispersSocketio(
 }
 
 // ---------------------------------------------------------------------------
+// uWS variant
+// ---------------------------------------------------------------------------
+
+export interface UwsWhisperUrl {
+  serverWsUrl: string;
+}
+
+export async function runWhispersUws(
+  p: WhispersParams,
+  urls: UwsWhisperUrl,
+): Promise<WhispersResult> {
+  console.log(
+    `[whispers-uws] n=${p.n} rooms=${p.rooms} interval=${p.whisperIntervalMs}ms duration=${p.testDurationSec}s url=${urls.serverWsUrl}`,
+  );
+  const startedAt = Date.now();
+  const stats: ClientStat[] = [];
+  const sockets: WebSocket[] = [];
+  const topicNames: string[] = [];
+  let initiallyConnected = 0;
+  const filler = padPayload(p.payloadBytes);
+
+  for (let i = 0; i < p.n; i++) {
+    const stat: ClientStat = {
+      sent: 0,
+      received: 0,
+      latencies: [],
+      connected: false,
+    };
+    stats.push(stat);
+
+    const topic = `whisper-room-${i % p.rooms}`;
+    topicNames.push(topic);
+
+    const ws = new WebSocket(urls.serverWsUrl);
+    ws.on("open", () => {
+      if (!stat.connected) {
+        stat.connected = true;
+        initiallyConnected++;
+        ws.send(JSON.stringify({ type: "subscribe", topic }));
+      }
+    });
+    ws.on("message", (data) => {
+      let text: string;
+      if (typeof data === "string") text = data;
+      else if (Buffer.isBuffer(data)) text = data.toString("utf-8");
+      else return;
+      try {
+        const parsed = JSON.parse(text) as {
+          type?: string;
+          payload?: { sentAt?: number };
+        };
+        if (
+          parsed.type === "whisper" &&
+          parsed.payload &&
+          typeof parsed.payload.sentAt === "number"
+        ) {
+          stat.received++;
+          stat.latencies.push(Date.now() - parsed.payload.sentAt);
+        }
+      } catch {
+        /* */
+      }
+    });
+    ws.on("error", () => {});
+
+    sockets.push(ws);
+
+    if ((i + 1) % p.rampPerSec === 0) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if ((i + 1) % 1000 === 0) {
+        console.log(`[whispers-uws] ramped ${i + 1}/${p.n}`);
+      }
+    }
+  }
+  await new Promise((r) => setTimeout(r, 5000));
+  console.log(
+    `[whispers-uws] all ramped (${Date.now() - startedAt}ms): ${initiallyConnected}/${p.n} connected`,
+  );
+
+  const stopAt = Date.now() + p.testDurationSec * 1000;
+  const tasks = sockets.map((ws, i) =>
+    (async () => {
+      const stat = stats[i];
+      const topic = topicNames[i];
+      const stagger = Math.floor(Math.random() * p.whisperIntervalMs);
+      await new Promise((r) => setTimeout(r, stagger));
+      while (Date.now() < stopAt) {
+        try {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: "whisper",
+                topic,
+                payload: { sentAt: Date.now(), from: i, pad: filler },
+              }),
+            );
+            stat.sent++;
+          }
+        } catch {
+          /* */
+        }
+        await new Promise((r) => setTimeout(r, p.whisperIntervalMs));
+      }
+    })(),
+  );
+
+  await Promise.all(tasks);
+  await new Promise((r) => setTimeout(r, 3000));
+
+  for (const s of sockets) {
+    try {
+      s.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return summarize("uws", p, stats, initiallyConnected, startedAt);
+}
+
+// ---------------------------------------------------------------------------
 // Shared summary
 // ---------------------------------------------------------------------------
 
 function summarize(
-  protocol: "anycable" | "socketio",
+  protocol: "anycable" | "socketio" | "uws",
   p: WhispersParams,
   stats: ClientStat[],
   initiallyConnected: number,

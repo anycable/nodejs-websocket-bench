@@ -66,6 +66,24 @@ app.ws<WsData>("/ws", {
     if (m.type === "unsubscribe" && typeof m.topic === "string") {
       ws.unsubscribe(m.topic);
       ws.getUserData().topics.delete(m.topic);
+      return;
+    }
+    // Whisper: client sends {type:"whisper", topic, payload}. Server
+    // republishes as {type:"whisper", payload} to the topic. uWS
+    // ws.publish broadcasts to subscribers minus sender by default, so
+    // this emulates client-to-client fan-out on the topic.
+    const w = parsed as {
+      type?: string;
+      topic?: string;
+      payload?: unknown;
+    };
+    if (
+      w.type === "whisper" &&
+      typeof w.topic === "string" &&
+      w.payload !== undefined
+    ) {
+      const out = JSON.stringify({ type: "whisper", payload: w.payload });
+      ws.publish(w.topic, out);
     }
   },
 

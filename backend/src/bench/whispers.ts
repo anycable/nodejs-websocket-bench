@@ -21,8 +21,8 @@ if (!benchRunnerUrl) {
   process.exit(1);
 }
 const protocol = (process.env.PROTOCOL || "anycable").toLowerCase();
-if (protocol !== "anycable" && protocol !== "socketio") {
-  console.error("PROTOCOL must be anycable or socketio");
+if (protocol !== "anycable" && protocol !== "socketio" && protocol !== "uws") {
+  console.error("PROTOCOL must be anycable, socketio, or uws");
   process.exit(1);
 }
 

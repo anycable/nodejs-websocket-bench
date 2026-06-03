@@ -1,0 +1,18 @@
+{
+  "protocol": "anycable",
+  "n": 10000,
+  "rooms": 100,
+  "initiallyConnected": 10000,
+  "whisperIntervalMs": 500,
+  "whispersSent": 113738,
+  "whispersReceived": 11178373,
+  "expectedReceived": 11260062,
+  "deliveryRatePct": 99.27,
+  "latencyMs": {
+    "p50": 1333,
+    "p95": 2501,
+    "p99": 3672,
+    "max": 24269
+  },
+  "totalElapsedMs": 94494
+}
