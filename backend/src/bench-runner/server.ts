@@ -179,15 +179,20 @@ app.post("/bench-jitter-anycable-traced", async (req, res) => {
 
 app.post("/bench-jitter-socketio", async (req, res) => {
   const params = paramsFromQuery(req);
+  const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
   await respondAsync(req, res, () =>
-    runJitterSocketio(params, { serverUrl: SOCKETIO_URL }),
+    runJitterSocketio(params, { serverUrl }),
   );
 });
 
+// CSR target separately overridable since CSR mode is a server-side env var
+// that has to be wired at boot. In production the CSR server is
+// socketio-server-small; default is the same SOCKETIO_URL for back-compat.
 app.post("/bench-jitter-socketio-csr", async (req, res) => {
   const params = paramsFromQuery(req);
+  const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
   await respondAsync(req, res, () =>
-    runJitterSocketioCsr(params, { serverUrl: SOCKETIO_URL }),
+    runJitterSocketioCsr(params, { serverUrl }),
   );
 });
 
