@@ -10,7 +10,12 @@
 // Update `baseline` here when the underlying setup changes or a real
 // drift gets accepted as the new floor.
 
-export type TestCategory = "latency" | "jitter" | "whispers" | "throughput";
+export type TestCategory =
+  | "latency"
+  | "jitter"
+  | "whispers"
+  | "throughput"
+  | "idle";
 
 export interface TestSpec {
   id: string;
@@ -21,10 +26,12 @@ export interface TestSpec {
   // Override the default bench-runner. Useful if a test needs a specific
   // shard (e.g., a 25K+ test that should land on a fresh-process shard).
   benchRunner?: string;
-  // Run sync (block on response) or async (enqueue + poll). Use "async"
-  // for tests that may run >5 min so Railway's edge timeout doesn't kill
-  // the response.
-  mode: "sync" | "async";
+  // - "sync"        blocks on the response. <5 min tests only.
+  // - "async"       enqueues, polls /jobs/:id. For tests that may run >5 min.
+  // - "multi-shard" fans out across N bench-runner replicas via the
+  //                 shard-coordinator; rebaseline merges per-shard results.
+  //                 Set numShards + perShardN. Idle capacity tests use this.
+  mode: "sync" | "async" | "multi-shard";
   params: Record<string, string | number>;
   // Page baseline values, keyed by dotted paths into the result JSON.
   baseline: Record<string, number | string>;
@@ -33,6 +40,10 @@ export interface TestSpec {
   // Bench-runner-side label used in console output. Helpful for diffing
   // logs by-eye when something looks off.
   label?: string;
+  // Multi-shard config. Total clients = numShards * perShardN; shards run
+  // in parallel against the same target. Ignored unless mode is "multi-shard".
+  numShards?: number;
+  perShardN?: number;
 }
 
 // Internal Railway targets used by the manifest. Bench-runners are on
@@ -318,5 +329,61 @@ export const tests: TestSpec[] = [
     params: { ...THROUGHPUT_10K_1M, cableUrl: TARGETS.anycablePro, broadcastUrl: TARGETS.anycableProBroadcast },
     baseline: { deliveryRatePct: 100, "latencyRawMs.p50": 365, "latencyRawMs.p99": 3927 },
     driftThresholdPct: 20,
+  },
+
+  // -------------------------------------------------------------------------
+  // Idle capacity (multi-shard; gated behind INCLUDE_IDLE=1 in rebaseline
+  // because each test fans out across 50 bench-runner replicas)
+  // -------------------------------------------------------------------------
+  {
+    id: "idle-socketio",
+    description: "Idle connections held, default Socket.io, 1M target",
+    category: "idle",
+    endpoint: "bench-idle-socketio",
+    mode: "multi-shard",
+    numShards: 50,
+    perShardN: 20000,
+    params: { hold: 120, ramp: 200, stream: "idle-rebaseline", serverUrl: TARGETS.socketio },
+    // Socket.io tops out around 120K because the Node event loop saturates
+    // on handshakes long before reaching 1M.
+    baseline: { connected: 119826 },
+    driftThresholdPct: 20,
+  },
+  {
+    id: "idle-anycable-oss",
+    description: "Idle connections held, AnyCable OSS, 1M target",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 50,
+    perShardN: 20000,
+    params: { hold: 120, ramp: 200, stream: "idle-rebaseline", cableUrl: TARGETS.anycableOss },
+    baseline: { connected: 821877 },
+    driftThresholdPct: 10,
+  },
+  {
+    id: "idle-anycable-pro",
+    description: "Idle connections held, AnyCable Pro, 1M target",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 50,
+    perShardN: 20000,
+    params: { hold: 120, ramp: 200, stream: "idle-rebaseline", cableUrl: TARGETS.anycablePro },
+    baseline: { connected: 822037 },
+    driftThresholdPct: 10,
+  },
+  {
+    id: "idle-uws",
+    description: "Idle connections held, uWS, 1M target",
+    category: "idle",
+    endpoint: "bench-idle-uws",
+    mode: "multi-shard",
+    numShards: 50,
+    perShardN: 20000,
+    params: { hold: 120, ramp: 200, stream: "idle-rebaseline", wsUrl: TARGETS.uwsWs },
+    // uWS is the only option that holds the full 1M and a bit more.
+    baseline: { connected: 1018366 },
+    driftThresholdPct: 10,
   },
 ];

@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import { tests, type TestSpec } from "./tests-manifest.js";
+import { runShards, type ShardSpec } from "../lib/shard-coordinator.js";
 
 // Each test enqueue + poll cycle is fast; the long wait is on the server.
 // Pad timeouts so a slow Railway moment doesn't lose a result.
@@ -37,8 +38,22 @@ if (!benchRunnerDefault) {
 
 const filter = (process.env.FILTER || "").trim();
 const dryRun = process.env.DRY_RUN === "1";
+const includeIdle = process.env.INCLUDE_IDLE === "1";
 const outputDir =
   process.env.OUTPUT_DIR || join(process.cwd(), "..", "..", "tmp", "v1.6.14-bench-results");
+
+// Bench-runner URL pool for multi-shard tests. Defaults to the 50
+// production bench-runner replicas; override with comma-separated list.
+// The first replica is named `bench-runner` (no -1 suffix); -2..-50 follow.
+const benchRunnerUrls = process.env.BENCH_RUNNER_URLS
+  ? process.env.BENCH_RUNNER_URLS.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  : Array.from({ length: 50 }, (_, i) =>
+      i === 0
+        ? "https://bench-runner-production.up.railway.app"
+        : `https://bench-runner-${i + 1}-production.up.railway.app`,
+    );
 
 // Color helpers. Off when stdout isn't a TTY (CI, pipes) so the report
 // stays grep-friendly. Use ANSI directly; no chalk dep needed.
@@ -68,7 +83,14 @@ function matchesFilter(spec: TestSpec): boolean {
   return false;
 }
 
-const selected = tests.filter(matchesFilter);
+// Idle tests are slow (~4 min each, 50 shards in parallel). Gate behind
+// INCLUDE_IDLE=1 so the everyday rebaseline doesn't take 20+ min on them.
+const selected = tests.filter((t) => {
+  if (!matchesFilter(t)) return false;
+  if (t.category === "idle" && !includeIdle && !filter.includes("idle"))
+    return false;
+  return true;
+});
 if (selected.length === 0) {
   console.error(`No tests matched FILTER="${filter}"`);
   process.exit(1);
@@ -149,8 +171,82 @@ function formatDelta(row: DeltaRow): string {
   return `      ${tag}  ${row.field.padEnd(28)}  ${String(row.baseline).padStart(10)} → ${String(row.current ?? "n/a").padStart(10)}${pct}`;
 }
 
+// For multi-shard tests, the bench-runner endpoint must return a shape with
+// numeric counts we can sum. The idle endpoints return IdleResult.
+interface IdleLikeResult {
+  connected: number;
+  welcomed?: number;
+  subscribed?: number;
+  failed?: number;
+}
+
+// Fan a multi-shard test across `spec.numShards` bench-runner replicas via
+// the shard-coordinator and return the merged result. Each shard runs N/k
+// clients against the same target server, so the aggregate connected count
+// is what the page reports.
+async function runMultiShard(spec: TestSpec): Promise<IdleLikeResult> {
+  if (!spec.numShards || !spec.perShardN) {
+    throw new Error(`${spec.id}: multi-shard mode needs numShards + perShardN`);
+  }
+  if (benchRunnerUrls.length < spec.numShards) {
+    throw new Error(
+      `${spec.id}: needs ${spec.numShards} shards but BENCH_RUNNER_URLS only has ${benchRunnerUrls.length}`,
+    );
+  }
+  const shards: ShardSpec[] = benchRunnerUrls
+    .slice(0, spec.numShards)
+    .map((url, i) => ({
+      url,
+      label: `s${i + 1}`,
+      endpoint: spec.endpoint,
+      query: {
+        n: spec.perShardN!,
+        shard: `s${i + 1}`,
+        ...Object.fromEntries(
+          Object.entries(spec.params).map(([k, v]) => [k, String(v)]),
+        ),
+      },
+    }));
+
+  // Use async on each shard via the coordinator. printProgress off because
+  // 50-shard log streaming is noisy; the per-shard outcomes get printed below.
+  const outcomes = await runShards<IdleLikeResult>(shards, {
+    pollIntervalMs: 10_000,
+    printProgress: false,
+    shardTimeoutMs: 15 * 60 * 1000,
+  });
+
+  const totals: IdleLikeResult = {
+    connected: 0,
+    welcomed: 0,
+    subscribed: 0,
+    failed: 0,
+  };
+  let shardErrors = 0;
+  for (const o of outcomes) {
+    if (o.status === "done" && o.result) {
+      totals.connected += o.result.connected ?? 0;
+      totals.welcomed = (totals.welcomed ?? 0) + (o.result.welcomed ?? 0);
+      totals.subscribed = (totals.subscribed ?? 0) + (o.result.subscribed ?? 0);
+      totals.failed = (totals.failed ?? 0) + (o.result.failed ?? 0);
+    } else {
+      shardErrors++;
+    }
+  }
+  if (shardErrors > 0) {
+    console.log(
+      `      ${c.yellow}${shardErrors} of ${outcomes.length} shard(s) failed; totals cover the rest${c.reset}`,
+    );
+  }
+  return totals;
+}
+
 // Enqueue + (poll if async). Returns the raw result JSON.
 async function runTest(spec: TestSpec, baseUrl: string): Promise<unknown> {
+  if (spec.mode === "multi-shard") {
+    return runMultiShard(spec);
+  }
+
   const qs = new URLSearchParams();
   if (spec.mode === "async") qs.set("async", "1");
   for (const [k, v] of Object.entries(spec.params)) qs.set(k, String(v));
