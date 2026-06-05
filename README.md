@@ -448,6 +448,75 @@ For the bench-runner shards specifically: they're ~64 MB each at idle, so 50 of 
 | `SAMPLE_RATE`   | `30` — Railway enforces a minimum (~30s) for short windows |
 | `RAILWAY_TOKEN` | Optional override; falls back to `~/.railway/config.json` |
 
+## Re-baselining
+
+The page numbers are kept honest by a tests manifest at
+`backend/src/bench/tests-manifest.ts` and a single-command driver.
+
+```
+cd backend
+BENCH_RUNNER_URL=https://bench-runner-production.up.railway.app \
+  npm run bench:rebaseline
+```
+
+This walks the 24 default tests (latency, jitter, whispers, throughput),
+hits each bench-runner endpoint, writes the result JSON to
+`tmp/v1.6.14-bench-results/{id}.json`, and prints a delta-vs-baseline
+report. Drift outside the per-test threshold gets a yellow `drift` flag;
+regressions (delivery dropped, threshold breached on key metrics) get a
+red `regress` and the process exits non-zero.
+
+**Filters**
+
+```
+FILTER=jitter             # only jitter tests
+FILTER=latency-anycable   # only AnyCable latency
+FILTER=jitter,whispers    # multiple categories or substrings
+DRY_RUN=1                 # print the plan, don't run
+```
+
+**Heavier categories** are gated behind opt-in flags:
+
+```
+INCLUDE_IDLE=1            # adds 4 idle tests (multi-shard, ~16 min)
+INCLUDE_AVALANCHE=1       # adds 5 avalanche tests (auto-redeploys server)
+```
+
+A full sweep with everything (33 tests) takes ~90 min wall-clock.
+
+**Per-run history** lives at `tmp/v1.6.14-bench-results/runs/{ISO-ts}/`.
+The latest result is also kept at the un-timestamped path so existing
+`jq` queries still work. To see how each headline number has moved
+across runs:
+
+```
+npm run bench:rebaseline:history
+LAST=10 FILTER=jitter npm run bench:rebaseline:history
+```
+
+Each test's baseline fields are shown as a sequence with a colored arrow:
+green when the change is in the better direction (delivery up, latency
+down, connections up), red when worse, yellow on significant swing.
+
+**Multi-shard tests** (the 4 idle entries) fan out across 50 bench-runner
+replicas via `lib/shard-coordinator.ts`. The runner sums per-shard
+`connected` and pulls peak memory + CPU from Railway metrics for the
+target service, deriving `ramKbPerConnected`. If your fleet has fewer
+than 50 replicas, override:
+
+```
+BENCH_RUNNER_URLS=https://br-1.up.railway.app,https://br-2.up.railway.app,... \
+  INCLUDE_IDLE=1 npm run bench:rebaseline
+```
+
+**Avalanche tests** ramp N socket.io clients against `socketio-server`,
+then auto-trigger `railway service redeploy --service socketio-server
+--yes` after the bench-runner reports ramp complete. Recovery time and
+reconnect rate are pulled from the bench-runner response and compared
+against the baseline. The 25K row is the documented failure case
+(0% reconnected); the smaller rows recover within 2-8 seconds depending
+on container sizing.
+
 ## Notes and caveats
 
 - **CSR adapter choice.** We benchmarked CSR with the default in-memory adapter. With Redis Streams or MongoDB the latency tail might shift; the docs note CSR is incompatible with Redis pub/sub specifically.
