@@ -11,9 +11,13 @@
 //   OUTPUT_DIR=tmp/v1.6.14-bench-results  # JSON output (default)
 //
 // What lands per test:
-//   - `${OUTPUT_DIR}/${id}.json`  the raw bench-runner result
+//   - `${OUTPUT_DIR}/${id}.json`            the latest result (overwrites)
+//   - `${OUTPUT_DIR}/runs/{ts}/${id}.json`  same result, timestamped (kept)
 //   - A line in the terminal showing baseline → current with % drift
 //   - Color: green within threshold, yellow above, red if delivery dropped
+//
+// History dir lets `npm run bench:rebaseline:history` show trend across the
+// last N runs without rerunning anything.
 //
 // Exit code 1 if any test regressed (drift > threshold OR deliveryRate < 99).
 
@@ -98,13 +102,26 @@ if (selected.length === 0) {
 
 if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
 
+// Per-run history dir. Filenames per test go in here alongside the latest
+// JSON in outputDir, so a `runs/` subdir under the same output root has
+// the rebaseline history. The timestamp uses a sortable, filename-safe
+// format so directory listings come back in chronological order.
+const runTimestamp = new Date()
+  .toISOString()
+  .replace(/[:.]/g, "-")
+  .replace("T", "T")
+  .slice(0, 19);
+const historyDir = join(outputDir, "runs", runTimestamp);
+mkdirSync(historyDir, { recursive: true });
+
 console.log(
   `${c.bold}Rebaselining ${selected.length} test(s)${c.reset}${
     filter ? ` (filter="${filter}")` : ""
   }`,
 );
 console.log(`Default bench-runner: ${benchRunnerDefault}`);
-console.log(`Output dir:           ${outputDir}\n`);
+console.log(`Output dir:           ${outputDir}`);
+console.log(`Run timestamp:        ${runTimestamp}\n`);
 
 if (dryRun) {
   console.log(`${c.dim}-- DRY_RUN: showing plan, not running --${c.reset}\n`);
@@ -309,9 +326,13 @@ for (const spec of selected) {
     const result = await runTest(spec, baseUrl);
     const elapsed = ((Date.now() - startedMs) / 1000).toFixed(1);
 
-    // Write raw result to disk.
+    // Write raw result to disk. Latest copy at `outputDir/${id}.json`
+    // (overwritten) so manual jq queries find it where they expect;
+    // historical copy at `outputDir/runs/${ts}/${id}.json` for trend.
+    const json = JSON.stringify(result, null, 2);
     const outPath = join(outputDir, `${spec.id}.json`);
-    writeFileSync(outPath, JSON.stringify(result, null, 2));
+    writeFileSync(outPath, json);
+    writeFileSync(join(historyDir, `${spec.id}.json`), json);
 
     // Compute deltas vs baseline.
     const rows: DeltaRow[] = [];
