@@ -44,6 +44,11 @@ export interface TestSpec {
   // in parallel against the same target. Ignored unless mode is "multi-shard".
   numShards?: number;
   perShardN?: number;
+  // Railway service ID of the target. When set on a multi-shard test, the
+  // runner queries Railway metrics for the test window and attaches peak
+  // memory / CPU plus derived RAM-per-connection to the merged result.
+  // Look up via `railway status --json` or the dashboard URL.
+  targetServiceId?: string;
 }
 
 // Internal Railway targets used by the manifest. Bench-runners are on
@@ -352,7 +357,8 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", serverUrl: TARGETS.socketio },
-    baseline: { connected: 120000 },
+    targetServiceId: "8b861242-2747-42a4-a831-8c63a8289f22",
+    baseline: { connected: 120000, ramKbPerConnected: 52 },
     driftThresholdPct: 60,
   },
   {
@@ -364,7 +370,8 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", cableUrl: TARGETS.anycableOss },
-    baseline: { connected: 820000 },
+    targetServiceId: "a6f8e7a0-46fb-4614-9a32-6f97f49bad09",
+    baseline: { connected: 820000, ramKbPerConnected: 34, peakCpuPercent: 10 },
     driftThresholdPct: 60,
   },
   {
@@ -376,7 +383,8 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", cableUrl: TARGETS.anycablePro },
-    baseline: { connected: 820000 },
+    targetServiceId: "5cef6fb0-7f6d-4ef3-a92d-93266af42b45",
+    baseline: { connected: 820000, ramKbPerConnected: 18, peakCpuPercent: 8 },
     driftThresholdPct: 60,
   },
   {
@@ -388,7 +396,8 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", wsUrl: TARGETS.uwsWs },
-    baseline: { connected: 1000000 },
+    targetServiceId: "fb6c422b-b772-4187-bd31-fa616f40d513",
+    baseline: { connected: 1000000, ramKbPerConnected: 5 },
     driftThresholdPct: 60,
   },
 ];

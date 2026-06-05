@@ -27,6 +27,12 @@ import { Agent, setGlobalDispatcher } from "undici";
 
 import { tests, type TestSpec } from "./tests-manifest.js";
 import { runShards, type ShardSpec } from "../lib/shard-coordinator.js";
+import { fetchMetric, readRailwayToken } from "../lib/railway-api.js";
+
+// Railway project that hosts the bench targets. Hardcoded because it's
+// stable across runs; can override with PROJECT_ID for a different env.
+const RAILWAY_PROJECT_ID =
+  process.env.PROJECT_ID || "fd842a43-8d78-48c0-879f-4b5311c8c004";
 
 // Each test enqueue + poll cycle is fast; the long wait is on the server.
 // Pad timeouts so a slow Railway moment doesn't lose a result.
@@ -189,12 +195,71 @@ function formatDelta(row: DeltaRow): string {
 }
 
 // For multi-shard tests, the bench-runner endpoint must return a shape with
-// numeric counts we can sum. The idle endpoints return IdleResult.
+// numeric counts we can sum. The idle endpoints return IdleResult; we also
+// attach Railway metrics (peak memory, CPU, derived RAM/conn) when the
+// manifest entry has a targetServiceId set.
 interface IdleLikeResult {
   connected: number;
   welcomed?: number;
   subscribed?: number;
   failed?: number;
+  // Populated from Railway metrics when targetServiceId is set:
+  peakMemoryMb?: number;
+  peakCpuPercent?: number;
+  ramKbPerConnected?: number;
+}
+
+// Pull memory + CPU peak from Railway metrics over the test window. Returns
+// the values if successful, undefined fields if unavailable (no token, no
+// projectId, or empty metric response). Failures don't block the test.
+async function fetchTargetMetrics(
+  serviceId: string,
+  startedAt: Date,
+  endedAt: Date,
+): Promise<{ peakMemoryMb?: number; peakCpuPercent?: number }> {
+  let token: string;
+  try {
+    token = readRailwayToken();
+  } catch {
+    return {};
+  }
+  // Pad the window so the ramp-in and tail are captured even if the test
+  // returned just before a metric sample point landed.
+  const padMs = 30 * 1000;
+  const windowStart = new Date(startedAt.getTime() - padMs).toISOString();
+  const windowEnd = new Date(endedAt.getTime() + padMs).toISOString();
+  try {
+    const [memPoints, cpuPoints] = await Promise.all([
+      fetchMetric({
+        token,
+        projectId: RAILWAY_PROJECT_ID,
+        serviceId,
+        measurement: "MEMORY_USAGE_GB",
+        startDate: windowStart,
+        endDate: windowEnd,
+      }),
+      fetchMetric({
+        token,
+        projectId: RAILWAY_PROJECT_ID,
+        serviceId,
+        measurement: "CPU_USAGE",
+        startDate: windowStart,
+        endDate: windowEnd,
+      }),
+    ]);
+    const peakMemGb = memPoints.length > 0
+      ? Math.max(...memPoints.map((p) => p.value))
+      : undefined;
+    const peakCpu = cpuPoints.length > 0
+      ? Math.max(...cpuPoints.map((p) => p.value))
+      : undefined;
+    return {
+      peakMemoryMb: peakMemGb !== undefined ? Math.round(peakMemGb * 1024) : undefined,
+      peakCpuPercent: peakCpu !== undefined ? Number(peakCpu.toFixed(2)) : undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 // Fan a multi-shard test across `spec.numShards` bench-runner replicas via
@@ -258,10 +323,38 @@ async function runMultiShard(spec: TestSpec): Promise<IdleLikeResult> {
   return totals;
 }
 
+// Wraps runMultiShard to also fetch + attach Railway metrics for the target.
+async function runMultiShardWithMetrics(
+  spec: TestSpec,
+): Promise<IdleLikeResult> {
+  const startedAt = new Date();
+  const totals = await runMultiShard(spec);
+  const endedAt = new Date();
+  if (spec.targetServiceId) {
+    const metrics = await fetchTargetMetrics(
+      spec.targetServiceId,
+      startedAt,
+      endedAt,
+    );
+    if (metrics.peakMemoryMb !== undefined) {
+      totals.peakMemoryMb = metrics.peakMemoryMb;
+      if (totals.connected > 0) {
+        totals.ramKbPerConnected = Number(
+          ((metrics.peakMemoryMb * 1024) / totals.connected).toFixed(2),
+        );
+      }
+    }
+    if (metrics.peakCpuPercent !== undefined) {
+      totals.peakCpuPercent = metrics.peakCpuPercent;
+    }
+  }
+  return totals;
+}
+
 // Enqueue + (poll if async). Returns the raw result JSON.
 async function runTest(spec: TestSpec, baseUrl: string): Promise<unknown> {
   if (spec.mode === "multi-shard") {
-    return runMultiShard(spec);
+    return runMultiShardWithMetrics(spec);
   }
 
   const qs = new URLSearchParams();
