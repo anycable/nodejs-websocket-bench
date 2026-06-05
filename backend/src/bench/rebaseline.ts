@@ -23,6 +23,7 @@
 
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import { tests, type TestSpec } from "./tests-manifest.js";
@@ -49,6 +50,7 @@ if (!benchRunnerDefault) {
 const filter = (process.env.FILTER || "").trim();
 const dryRun = process.env.DRY_RUN === "1";
 const includeIdle = process.env.INCLUDE_IDLE === "1";
+const includeAvalanche = process.env.INCLUDE_AVALANCHE === "1";
 const outputDir =
   process.env.OUTPUT_DIR || join(process.cwd(), "..", "..", "tmp", "v1.6.14-bench-results");
 
@@ -93,11 +95,17 @@ function matchesFilter(spec: TestSpec): boolean {
   return false;
 }
 
-// Idle tests are slow (~4 min each, 50 shards in parallel). Gate behind
-// INCLUDE_IDLE=1 so the everyday rebaseline doesn't take 20+ min on them.
+// Idle and avalanche tests are slow + invasive (multi-shard or redeploy).
+// Gate them behind INCLUDE_* flags so the everyday rebaseline stays fast.
 const selected = tests.filter((t) => {
   if (!matchesFilter(t)) return false;
   if (t.category === "idle" && !includeIdle && !filter.includes("idle"))
+    return false;
+  if (
+    t.category === "avalanche" &&
+    !includeAvalanche &&
+    !filter.includes("avalanche")
+  )
     return false;
   return true;
 });
@@ -351,10 +359,120 @@ async function runMultiShardWithMetrics(
   return totals;
 }
 
+// Trigger `railway service redeploy --service X --yes` via the local CLI.
+// Resolves once the spawn finishes (the CLI returns after kicking off the
+// redeploy, not after the new deployment is healthy). Errors are logged
+// but don't block the test.
+function spawnRedeploy(serviceName: string): Promise<void> {
+  return new Promise((resolve) => {
+    const proc = spawn(
+      "railway",
+      ["service", "redeploy", "--service", serviceName, "--yes"],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        console.log(
+          `      ${c.yellow}redeploy ${serviceName} exit=${code} stderr=${stderr.slice(0, 200)}${c.reset}`,
+        );
+      } else {
+        console.log(`      ${c.dim}redeploy ${serviceName} triggered${c.reset}`);
+      }
+      resolve();
+    });
+    proc.on("error", (err) => {
+      console.log(
+        `      ${c.yellow}redeploy ${serviceName} spawn failed: ${err.message}${c.reset}`,
+      );
+      resolve();
+    });
+  });
+}
+
+// Avalanche flow:
+//   1. Enqueue the bench-avalanche-* job in async mode.
+//   2. Estimate when the ramp completes (n / rampPerSec) + a 10 s buffer.
+//   3. After that delay, spawn `railway service redeploy --service X --yes`
+//      so the in-process WS layer restarts under N held connections.
+//   4. Keep polling /jobs/:id until done, then return the result.
+//
+// The bench-runner's avalanche endpoints take `prearmSec` and
+// `recoveryWaitSec` query params: prearm is how long after ramp it waits
+// for the operator (us) to trigger the redeploy; recoveryWait is the
+// reconnection window. The manifest sets both with enough headroom that
+// our auto-trigger lands inside prearm.
+async function runAvalancheWithRedeploy(
+  spec: TestSpec,
+  baseUrl: string,
+): Promise<unknown> {
+  if (!spec.redeployServiceName) {
+    throw new Error(`${spec.id}: avalanche mode needs redeployServiceName`);
+  }
+  const qs = new URLSearchParams();
+  qs.set("async", "1");
+  for (const [k, v] of Object.entries(spec.params)) qs.set(k, String(v));
+  const url = `${baseUrl}/${spec.endpoint}?${qs.toString()}`;
+
+  const res = await fetch(url, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`enqueue HTTP ${res.status} ${res.statusText}`);
+  }
+  const body = (await res.json()) as { jobId?: string };
+  const jobId = body.jobId;
+  if (!jobId) throw new Error("avalanche enqueue: missing jobId");
+
+  // Best-effort estimate of when the ramp completes server-side.
+  // bench-runner ramps at `ramp` connections/sec for `n` total clients.
+  const n = Number(spec.params.n ?? 0);
+  const rampPerSec = Number(spec.params.ramp ?? 200);
+  const rampSec = rampPerSec > 0 ? Math.ceil(n / rampPerSec) : 60;
+  const triggerAfterSec = rampSec + 10;
+  console.log(
+    `      ${c.dim}avalanche: will redeploy ${spec.redeployServiceName} in ${triggerAfterSec}s (after ramp)${c.reset}`,
+  );
+
+  // Schedule the redeploy on a timer; don't block the poll loop.
+  setTimeout(() => {
+    spawnRedeploy(spec.redeployServiceName!).catch(() => {});
+  }, triggerAfterSec * 1000).unref();
+
+  // Poll until the job finishes.
+  const deadline = Date.now() + 30 * 60 * 1000;
+  let lastLog = "";
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const pollRes = await fetch(`${baseUrl}/jobs/${jobId}?logLines=10`);
+    if (!pollRes.ok) continue;
+    const poll = (await pollRes.json()) as {
+      status: string;
+      result?: unknown;
+      error?: string;
+      logTail?: string[];
+    };
+    if (poll.logTail && poll.logTail.length > 0) {
+      const newest = poll.logTail[poll.logTail.length - 1];
+      if (newest && newest !== lastLog) {
+        process.stdout.write(`      ${c.dim}${newest.slice(0, 80)}${c.reset}\n`);
+        lastLog = newest;
+      }
+    }
+    if (poll.status === "done") return poll.result;
+    if (poll.status === "failed") throw new Error(poll.error || "job failed");
+  }
+  throw new Error("avalanche poll timed out");
+}
+
 // Enqueue + (poll if async). Returns the raw result JSON.
 async function runTest(spec: TestSpec, baseUrl: string): Promise<unknown> {
   if (spec.mode === "multi-shard") {
     return runMultiShardWithMetrics(spec);
+  }
+  if (spec.mode === "avalanche") {
+    return runAvalancheWithRedeploy(spec, baseUrl);
   }
 
   const qs = new URLSearchParams();

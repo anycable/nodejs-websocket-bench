@@ -15,7 +15,8 @@ export type TestCategory =
   | "jitter"
   | "whispers"
   | "throughput"
-  | "idle";
+  | "idle"
+  | "avalanche";
 
 export interface TestSpec {
   id: string;
@@ -31,7 +32,12 @@ export interface TestSpec {
   // - "multi-shard" fans out across N bench-runner replicas via the
   //                 shard-coordinator; rebaseline merges per-shard results.
   //                 Set numShards + perShardN. Idle capacity tests use this.
-  mode: "sync" | "async" | "multi-shard";
+  // - "avalanche"   async test where the runner triggers `railway service
+  //                 redeploy` mid-flight to simulate the in-process WS
+  //                 layer restarting under N held connections. Set
+  //                 redeployServiceName + the bench-runner endpoint's
+  //                 prearmSec param.
+  mode: "sync" | "async" | "multi-shard" | "avalanche";
   params: Record<string, string | number>;
   // Page baseline values, keyed by dotted paths into the result JSON.
   baseline: Record<string, number | string>;
@@ -49,6 +55,10 @@ export interface TestSpec {
   // memory / CPU plus derived RAM-per-connection to the merged result.
   // Look up via `railway status --json` or the dashboard URL.
   targetServiceId?: string;
+  // For mode "avalanche": the Railway service to redeploy mid-test.
+  // The runner spawns `railway service redeploy --service X --yes` after
+  // the bench-runner finishes ramping clients.
+  redeployServiceName?: string;
 }
 
 // Internal Railway targets used by the manifest. Bench-runners are on
@@ -399,5 +409,72 @@ export const tests: TestSpec[] = [
     targetServiceId: "fb6c422b-b772-4187-bd31-fa616f40d513",
     baseline: { connected: 1000000, ramKbPerConnected: 5 },
     driftThresholdPct: 60,
+  },
+
+  // -------------------------------------------------------------------------
+  // Avalanche (in-process WS layer restart under N held connections).
+  // Each test ramps N socket.io clients against socketio-server, then
+  // triggers `railway service redeploy --service socketio-server --yes`
+  // mid-test and measures recovery time + reconnection percentage. Gated
+  // behind INCLUDE_AVALANCHE=1 because each restart takes ~3-5 min and the
+  // 25K test typically OOMs the new container.
+  // -------------------------------------------------------------------------
+  {
+    id: "avalanche-socketio-5k",
+    description: "Avalanche: 5K Socket.io clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketio-server",
+    params: { n: 5000, ramp: 200, prearm: 90, recoveryWait: 180, stream: "avalanche-5k", serverUrl: TARGETS.socketio },
+    baseline: { recoverySec: 4.5, reconnectedPct: 100 },
+    driftThresholdPct: 30,
+  },
+  {
+    id: "avalanche-socketio-10k",
+    description: "Avalanche: 10K Socket.io clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketio-server",
+    params: { n: 10000, ramp: 200, prearm: 120, recoveryWait: 240, stream: "avalanche-10k", serverUrl: TARGETS.socketio },
+    baseline: { recoverySec: 3.9, reconnectedPct: 100 },
+    driftThresholdPct: 30,
+  },
+  {
+    id: "avalanche-socketio-15k",
+    description: "Avalanche: 15K Socket.io clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketio-server",
+    params: { n: 15000, ramp: 200, prearm: 150, recoveryWait: 240, stream: "avalanche-15k", serverUrl: TARGETS.socketio },
+    baseline: { recoverySec: 5.8, reconnectedPct: 98.5 },
+    driftThresholdPct: 30,
+  },
+  {
+    id: "avalanche-socketio-20k",
+    description: "Avalanche: 20K Socket.io clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketio-server",
+    params: { n: 20000, ramp: 200, prearm: 180, recoveryWait: 240, stream: "avalanche-20k", serverUrl: TARGETS.socketio },
+    baseline: { recoverySec: 8.0, reconnectedPct: 96.2 },
+    driftThresholdPct: 30,
+  },
+  {
+    id: "avalanche-socketio-25k",
+    description: "Avalanche: 25K Socket.io clients, app redeploy (the cliff)",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketio-server",
+    params: { n: 25000, ramp: 200, prearm: 210, recoveryWait: 300, stream: "avalanche-25k", serverUrl: TARGETS.socketio },
+    // Page reports "never" for recovery and 0% reconnected at 25K.
+    // The runner returns the recovery timeout as recoverySec; this is the
+    // failure case we expect to keep reproducing.
+    baseline: { recoverySec: 300, reconnectedPct: 0 },
+    driftThresholdPct: 50,
   },
 ];
