@@ -335,6 +335,14 @@ export const tests: TestSpec[] = [
   // Idle capacity (multi-shard; gated behind INCLUDE_IDLE=1 in rebaseline
   // because each test fans out across 50 bench-runner replicas)
   // -------------------------------------------------------------------------
+  // Idle baselines are intentionally wide: container memory caps were
+  // equalized on 2026-06-05 (all 5 target services pinned to 32 GB) and
+  // the prior page numbers came from a non-uniform setup (anycable
+  // services on unlimited memory, socketio-server 953 MB, uws-server
+  // 476 MB). The first overnight sweep on equalized hardware will set
+  // the real baselines; until then, the runner reports drift but doesn't
+  // flag regression. The Socket.io ceiling is the Node event loop on
+  // handshakes (not memory), so it stays near its previous number.
   {
     id: "idle-socketio",
     description: "Idle connections held, default Socket.io, 1M target",
@@ -344,10 +352,8 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", serverUrl: TARGETS.socketio },
-    // Socket.io tops out around 120K because the Node event loop saturates
-    // on handshakes long before reaching 1M.
-    baseline: { connected: 119826 },
-    driftThresholdPct: 20,
+    baseline: { connected: 120000 },
+    driftThresholdPct: 60,
   },
   {
     id: "idle-anycable-oss",
@@ -358,8 +364,8 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", cableUrl: TARGETS.anycableOss },
-    baseline: { connected: 821877 },
-    driftThresholdPct: 10,
+    baseline: { connected: 820000 },
+    driftThresholdPct: 60,
   },
   {
     id: "idle-anycable-pro",
@@ -370,8 +376,8 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", cableUrl: TARGETS.anycablePro },
-    baseline: { connected: 822037 },
-    driftThresholdPct: 10,
+    baseline: { connected: 820000 },
+    driftThresholdPct: 60,
   },
   {
     id: "idle-uws",
@@ -382,8 +388,7 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", wsUrl: TARGETS.uwsWs },
-    // uWS is the only option that holds the full 1M and a bit more.
-    baseline: { connected: 1018366 },
-    driftThresholdPct: 10,
+    baseline: { connected: 1000000 },
+    driftThresholdPct: 60,
   },
 ];
