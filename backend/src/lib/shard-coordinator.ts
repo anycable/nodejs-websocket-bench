@@ -16,11 +16,16 @@
 
 import { Agent, setGlobalDispatcher } from "undici";
 
-// Polling requests are short (sub-second). The default fetch headers timeout
-// would still apply to enqueue POST + poll GET, both of which are fast.
-// Bump anyway so a slow Railway moment doesn't drop a poll cycle.
+// New-style bench-runners respond to enqueue POSTs sub-second; poll GETs
+// are similarly fast. But OLD bench-runners (pre-async-mode) ignore
+// ?async=1 and block the POST for the full test duration. Pad timeouts
+// generously so we can stay backwards-compatible with the older fleet,
+// matching what bench/idle-multi.ts uses for the same reason.
 setGlobalDispatcher(
-  new Agent({ headersTimeout: 60 * 1000, bodyTimeout: 60 * 1000 }),
+  new Agent({
+    headersTimeout: 30 * 60 * 1000,
+    bodyTimeout: 30 * 60 * 1000,
+  }),
 );
 
 export interface ShardSpec {
@@ -73,9 +78,16 @@ interface ShardState<T> {
   lastPrintedLogIdx: number;
 }
 
+// Enqueue returns one of three shapes:
+//   - {jobId}     new-style async bench-runner; caller polls /jobs/:id
+//   - {syncResult} pre-async bench-runner ignored ?async=1 and returned
+//                  the full result inline. Treat as already-done.
+//   - {error}     network / HTTP failure.
 async function enqueueShard(
   shard: ShardSpec,
-): Promise<{ jobId: string } | { error: string }> {
+): Promise<
+  { jobId: string } | { syncResult: unknown } | { error: string }
+> {
   const qs = new URLSearchParams();
   qs.set("async", "1");
   for (const [k, v] of Object.entries(shard.query)) {
@@ -87,9 +99,14 @@ async function enqueueShard(
     if (!res.ok) {
       return { error: `enqueue HTTP ${res.status} ${res.statusText}` };
     }
-    const body = (await res.json()) as { jobId?: string };
-    if (!body.jobId) return { error: "enqueue response missing jobId" };
-    return { jobId: body.jobId };
+    const body = (await res.json()) as Record<string, unknown>;
+    if (typeof body.jobId === "string") {
+      return { jobId: body.jobId };
+    }
+    // Old bench-runner: returned the full sync result instead of {jobId}.
+    // Anything with a result-shaped body counts; the caller decides what
+    // fields it cares about.
+    return { syncResult: body };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
@@ -171,6 +188,19 @@ export async function runShards<T>(
         state.error = r.error;
         state.endedAt = Date.now();
         console.log(`  ✗ ${state.spec.label}: enqueue failed: ${r.error}`);
+        return;
+      }
+      if ("syncResult" in r) {
+        // Old bench-runner returned the full result inline; no jobId, no
+        // polling needed. Mark done immediately. The bench-runner already
+        // held the connection for the entire test duration (Railway's
+        // 5-min HTTP cap permitting).
+        state.status = "done";
+        state.result = r.syncResult as T;
+        state.endedAt = Date.now();
+        console.log(
+          `  ✓ ${state.spec.label}: sync result in ${((state.endedAt - state.startedAt) / 1000).toFixed(1)}s`,
+        );
         return;
       }
       state.jobId = r.jobId;
