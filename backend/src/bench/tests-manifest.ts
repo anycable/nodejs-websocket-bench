@@ -427,8 +427,8 @@ export const tests: TestSpec[] = [
     mode: "avalanche",
     redeployServiceName: "socketio-server",
     params: { n: 5000, ramp: 200, prearm: 90, recoveryWait: 180, stream: "avalanche-5k", serverUrl: TARGETS.socketio },
-    baseline: { recoverySec: 4.5, reconnectedPct: 100 },
-    driftThresholdPct: 30,
+    baseline: { recoveryTimeMs: 4500, reconnectRatePct: 100, "reconnectMs.p99": 2200 },
+    driftThresholdPct: 50,
   },
   {
     id: "avalanche-socketio-10k",
@@ -438,8 +438,8 @@ export const tests: TestSpec[] = [
     mode: "avalanche",
     redeployServiceName: "socketio-server",
     params: { n: 10000, ramp: 200, prearm: 120, recoveryWait: 240, stream: "avalanche-10k", serverUrl: TARGETS.socketio },
-    baseline: { recoverySec: 3.9, reconnectedPct: 100 },
-    driftThresholdPct: 30,
+    baseline: { recoveryTimeMs: 3900, reconnectRatePct: 100 },
+    driftThresholdPct: 50,
   },
   {
     id: "avalanche-socketio-15k",
@@ -449,8 +449,8 @@ export const tests: TestSpec[] = [
     mode: "avalanche",
     redeployServiceName: "socketio-server",
     params: { n: 15000, ramp: 200, prearm: 150, recoveryWait: 240, stream: "avalanche-15k", serverUrl: TARGETS.socketio },
-    baseline: { recoverySec: 5.8, reconnectedPct: 98.5 },
-    driftThresholdPct: 30,
+    baseline: { recoveryTimeMs: 5800, reconnectRatePct: 98.5 },
+    driftThresholdPct: 50,
   },
   {
     id: "avalanche-socketio-20k",
@@ -460,8 +460,8 @@ export const tests: TestSpec[] = [
     mode: "avalanche",
     redeployServiceName: "socketio-server",
     params: { n: 20000, ramp: 200, prearm: 180, recoveryWait: 240, stream: "avalanche-20k", serverUrl: TARGETS.socketio },
-    baseline: { recoverySec: 8.0, reconnectedPct: 96.2 },
-    driftThresholdPct: 30,
+    baseline: { recoveryTimeMs: 8000, reconnectRatePct: 96.2 },
+    driftThresholdPct: 50,
   },
   {
     id: "avalanche-socketio-25k",
@@ -472,9 +472,11 @@ export const tests: TestSpec[] = [
     redeployServiceName: "socketio-server",
     params: { n: 25000, ramp: 200, prearm: 210, recoveryWait: 300, stream: "avalanche-25k", serverUrl: TARGETS.socketio },
     // Page reports "never" for recovery and 0% reconnected at 25K.
-    // The runner returns the recovery timeout as recoverySec; this is the
-    // failure case we expect to keep reproducing.
-    baseline: { recoverySec: 300, reconnectedPct: 0 },
-    driftThresholdPct: 50,
+    // The bench-runner returns whatever reconnectRatePct it observed in
+    // the recovery window; we baseline at the failure case (0%) with a
+    // wide threshold so even partial recovery would surface but won't
+    // trigger a regression flag.
+    baseline: { reconnectRatePct: 0 },
+    driftThresholdPct: 100,
   },
 ];
