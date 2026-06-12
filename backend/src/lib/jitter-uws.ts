@@ -155,13 +155,16 @@ export interface UwsUrls {
   // http:// URL of the uWS server's HTTP surface, e.g.
   // http://uws-server.railway.internal:3000 — used to kick the publisher.
   serverHttpUrl: string;
-  // Set to false to publish via cross-process HTTP /_broadcast instead of
-  // in-process /publish-local. Default = true (in-process).
+  // Default: per-message HTTP POST to /_broadcast (same as AnyCable). Set
+  // to `true` to delegate publishing to the uWS server's /publish-local
+  // endpoint (one HTTP trigger, then a 100-message app.publish() loop
+  // inside the server process) — useful for isolating in-process fan-out
+  // cost.
   publishViaServer?: boolean;
 }
 
 async function startUwsPublishing(p: JitterParams, urls: UwsUrls): Promise<void> {
-  if (urls.publishViaServer === false) {
+  if (urls.publishViaServer !== true) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     for (let seq = 1; seq <= p.totalMessages; seq++) {
       const data = JSON.stringify({ seq, sentAt: Date.now(), text: `m${seq}` });

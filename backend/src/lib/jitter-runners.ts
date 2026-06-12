@@ -230,9 +230,13 @@ export async function runJitterAnycable(
 
 export interface SocketioUrls {
   serverUrl: string;
-  // If set, publishing is delegated to socketio-server's /publish-local
-  // endpoint (in-process Socket.io fan-out). Otherwise the runner
-  // publishes via /_broadcast over HTTP.
+  // Default: per-message HTTP POST to /_broadcast. This matches how
+  // production publishers actually work (events emit one at a time from
+  // outside the WS process) and keeps Socket.io / uWS / AnyCable on the
+  // same publish path. Set this to `true` to delegate publishing to
+  // socketio-server's /publish-local endpoint instead (one HTTP trigger,
+  // then a 100-message emit() loop inside the server process — useful
+  // for measuring in-process fan-out in isolation).
   publishViaServer?: boolean;
 }
 
@@ -424,13 +428,14 @@ export async function runJitterSocketioCsr(
 }
 
 // ---------------------------------------------------------------------------
-// Socket.io publisher: by default, delegates to socketio-server's
-// /publish-local endpoint so the publish path is the realistic in-process
-// io.to().emit(). Falls back to /_broadcast over HTTP if publishViaServer
-// is false.
+// Socket.io publisher: default is per-message HTTP POST to /_broadcast,
+// matching how AnyCable is published and how production publishers actually
+// emit (one event at a time from outside the WS process). Set
+// publishViaServer=true to trigger an in-process emit() loop on the
+// Socket.io server instead — useful for isolating in-process fan-out cost.
 
 async function startSocketioPublishing(p: JitterParams, urls: SocketioUrls): Promise<void> {
-  if (urls.publishViaServer === false) {
+  if (urls.publishViaServer !== true) {
     return publish({
       url: `${urls.serverUrl}/_broadcast`,
       total: p.totalMessages,
@@ -438,7 +443,7 @@ async function startSocketioPublishing(p: JitterParams, urls: SocketioUrls): Pro
       stream: p.stream,
     });
   }
-  // Default path on Railway: trigger publishing on the Socket.io server.
+  // Opt-in path: trigger publishing inside the Socket.io server process.
   const qs = new URLSearchParams({
     total: String(p.totalMessages),
     interval: String(p.intervalMs),
