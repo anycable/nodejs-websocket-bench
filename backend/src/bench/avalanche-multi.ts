@@ -40,7 +40,7 @@ if (!benchRunnerUrl) {
 const railwayService = process.env.RAILWAY_SERVICE || "socketio-server";
 // Override the Socket.io target the bench-runner shard connects to. Useful
 // when testing a smaller, capped-memory socketio-server instead of the
-// regular one (e.g. socketio-server-small.railway.internal:3000).
+// regular one (e.g. socketio-server-csr.railway.internal:3000).
 const serverUrl = process.env.SERVER_URL;
 
 const scales = (process.env.SCALES || "1000,2500,5000,10000,20000")

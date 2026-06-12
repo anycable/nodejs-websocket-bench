@@ -66,10 +66,10 @@ export interface TestSpec {
 // from inside a bench-runner container.
 const TARGETS = {
   socketio: "http://socketio-server.railway.internal:3000",
-  // socketio-server-small is the CSR-enabled standalone Socket.io
+  // socketio-server-csr is the CSR-enabled standalone Socket.io
   // (SOCKETIO_CSR=1 env at boot). The default socketio-server runs
   // without CSR; both modes can't coexist in one process.
-  socketioCsr: "http://socketio-server-small.railway.internal:3000",
+  socketioCsr: "http://socketio-server-csr.railway.internal:3000",
   uwsWs: "ws://uws-server.railway.internal:3000/ws",
   uwsHttp: "http://uws-server.railway.internal:3000",
   anycableOss: "ws://anycable-go.railway.internal:8080/cable",
@@ -448,7 +448,7 @@ export const tests: TestSpec[] = [
     endpoint: "bench-avalanche-socketio",
     mode: "avalanche",
     redeployServiceName: "socketio-server",
-    params: { n: 15000, ramp: 200, prearm: 150, recoveryWait: 240, stream: "avalanche-15k", serverUrl: TARGETS.socketio },
+    params: { n: 15000, ramp: 200, prearm: 240, recoveryWait: 600, stream: "avalanche-15k", serverUrl: TARGETS.socketio },
     baseline: { recoveryTimeMs: 5800, reconnectRatePct: 98.5 },
     driftThresholdPct: 50,
   },
@@ -459,7 +459,7 @@ export const tests: TestSpec[] = [
     endpoint: "bench-avalanche-socketio",
     mode: "avalanche",
     redeployServiceName: "socketio-server",
-    params: { n: 20000, ramp: 200, prearm: 180, recoveryWait: 240, stream: "avalanche-20k", serverUrl: TARGETS.socketio },
+    params: { n: 20000, ramp: 200, prearm: 240, recoveryWait: 600, stream: "avalanche-20k", serverUrl: TARGETS.socketio },
     baseline: { recoveryTimeMs: 8000, reconnectRatePct: 96.2 },
     driftThresholdPct: 50,
   },
@@ -470,7 +470,7 @@ export const tests: TestSpec[] = [
     endpoint: "bench-avalanche-socketio",
     mode: "avalanche",
     redeployServiceName: "socketio-server",
-    params: { n: 25000, ramp: 200, prearm: 210, recoveryWait: 300, stream: "avalanche-25k", serverUrl: TARGETS.socketio },
+    params: { n: 25000, ramp: 200, prearm: 300, recoveryWait: 600, stream: "avalanche-25k", serverUrl: TARGETS.socketio },
     // Page reports "never" for recovery and 0% reconnected at 25K.
     // The bench-runner returns whatever reconnectRatePct it observed in
     // the recovery window; we baseline at the failure case (0%) with a

@@ -58,7 +58,7 @@ const windows: Window[] = [
   {
     label: "Socket.io small — avalanche 5K/10K/15K (0.5 GB cap)",
     serviceId: SVC.sioSmall,
-    serviceName: "socketio-server-small",
+    serviceName: "socketio-server-csr",
     start: "2026-05-04T18:30:00Z",
     end: "2026-05-04T18:59:30Z",
   },
@@ -67,7 +67,7 @@ const windows: Window[] = [
   {
     label: "Socket.io small — avalanche 20K/25K/30K (cliff at 25K)",
     serviceId: SVC.sioSmall,
-    serviceName: "socketio-server-small",
+    serviceName: "socketio-server-csr",
     start: "2026-05-04T22:48:00Z",
     end: "2026-05-04T23:21:30Z",
   },
@@ -75,7 +75,7 @@ const windows: Window[] = [
   {
     label: "Socket.io small — 25K cliff confirm",
     serviceId: SVC.sioSmall,
-    serviceName: "socketio-server-small",
+    serviceName: "socketio-server-csr",
     start: "2026-05-04T23:21:00Z",
     end: "2026-05-04T23:27:00Z",
   },
