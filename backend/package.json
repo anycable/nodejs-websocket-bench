@@ -23,6 +23,8 @@
     "bench:jitter:multi": "tsx src/bench/jitter-multi.ts",
     "bench:rebaseline": "tsx src/bench/rebaseline.ts",
     "bench:rebaseline:history": "tsx src/bench/rebaseline-history.ts",
+    "bench:throughput:multi": "tsx src/bench/throughput-multi.ts",
+    "bench:trace:anycable": "tsx src/bench/latency-trace-anycable.ts",
     "bench:avalanche:multi": "tsx src/bench/avalanche-multi.ts",
     "bench:deploy-impact:socketio-redis": "tsx src/bench/deploy-impact-socketio-redis.ts",
     "bench:deploy-impact:standalone-socketio": "tsx src/bench/deploy-impact-standalone-socketio.ts",
