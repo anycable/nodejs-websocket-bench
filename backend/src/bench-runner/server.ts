@@ -26,6 +26,7 @@ import {
   runJitterSocketioCsr,
 } from "../lib/jitter-runners.js";
 import { runJitterAnycableTraced } from "../lib/jitter-anycable-traced.js";
+import { runAnycableTrace } from "../lib/anycable-trace.js";
 import { runIdleAnycable, runIdleSocketio, runIdleUws } from "../lib/idle-runner.js";
 import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
 import { runDeployImpactSocketio } from "../lib/deploy-impact-runner.js";
@@ -150,6 +151,44 @@ app.post("/bench-jitter-anycable", async (req, res) => {
       cableUrl,
       broadcastUrl,
       broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+    }),
+  );
+});
+
+// Intra-Railway latency tracer for AnyCable broadcasts. Decomposes the
+// end-to-end p99 into four observable phases — http.broadcast,
+// bench.wait-first, bench.fanout-tail, bench.broadcast (total) —
+// emitted as OpenTelemetry OTLP-shaped spans. Run from inside the
+// bench-runner so anycable-go is on the same private network and the
+// http.broadcast span isn't polluted by external-network RTT (Starlink,
+// laptop hops, etc).
+//
+// Query: ?n=2500&broadcasts=2000&intervalMs=50&rampPerSec=200&includeSpans=1
+// Use ?async=1 (recommended): returns 202 {jobId}, poll /jobs/:id.
+app.post("/bench-trace-anycable", async (req, res) => {
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+  const broadcastUrl =
+    (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
+  const n = parseInt((req.query.n as string) || "2500", 10);
+  const broadcasts = parseInt((req.query.broadcasts as string) || "2000", 10);
+  const intervalMs = parseInt((req.query.intervalMs as string) || "50", 10);
+  const rampPerSec = parseInt((req.query.rampPerSec as string) || "200", 10);
+  const stream =
+    (req.query.stream as string) || `anycable-trace-${Date.now()}`;
+  const includeSpans = req.query.includeSpans === "1";
+
+  await respondAsync(req, res, () =>
+    runAnycableTrace({
+      cableUrl,
+      broadcastUrl,
+      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+      n,
+      broadcasts,
+      intervalMs,
+      rampPerSec,
+      stream,
+      includeSpans,
+      log: (line) => console.log(`[trace-ac] ${line}`),
     }),
   );
 });
