@@ -466,6 +466,32 @@ export const tests: TestSpec[] = [
     baseline: { recoveryTimeMs: 8000, reconnectRatePct: 96.2 },
     driftThresholdPct: 50,
   },
+  // uWS avalanche: same shape, redeploys uws-server. The page currently
+  // says "uWS pushes the cliff further but the shape is the same" by
+  // inference; these tests give us measurement at the page-relevant
+  // scales (10K is the operational good case; 20K is the cliff).
+  {
+    id: "avalanche-uws-10k",
+    description: "Avalanche: 10K uWS clients, server redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-uws",
+    mode: "avalanche",
+    redeployServiceName: "uws-server",
+    params: { n: 10000, ramp: 200, prearm: 180, recoveryWait: 240, stream: "avalanche-uws-10k", wsUrl: TARGETS.uwsWs },
+    baseline: { recoveryTimeMs: 5000, reconnectRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "avalanche-uws-20k",
+    description: "Avalanche: 20K uWS clients, server redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-uws",
+    mode: "avalanche",
+    redeployServiceName: "uws-server",
+    params: { n: 20000, ramp: 200, prearm: 240, recoveryWait: 600, stream: "avalanche-uws-20k", wsUrl: TARGETS.uwsWs },
+    baseline: { recoveryTimeMs: 60000, reconnectRatePct: 90 },
+    driftThresholdPct: 50,
+  },
   {
     id: "avalanche-socketio-25k",
     description: "Avalanche: 25K Socket.io clients, app redeploy (the cliff)",
