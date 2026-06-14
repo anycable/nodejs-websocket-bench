@@ -17,6 +17,7 @@ import { WebSocket } from "ws";
 import { createCable } from "@anycable/core";
 
 import { percentile } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 
 export interface StandaloneDeployImpactAnycableParams {
   n: number;
@@ -142,7 +143,7 @@ export async function runStandaloneDeployImpactAnycable(
     }
   }
 
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   const rampElapsedMs = Date.now() - startedAt;
   console.log(
     `[standalone-deploy-impact-ac] all ramped (${rampElapsedMs}ms): ${initiallyConnected}/${p.n} initial`,

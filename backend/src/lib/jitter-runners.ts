@@ -14,6 +14,7 @@ import { createCable } from "@anycable/core";
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 import type { JitterParams } from "./params.js";
 
 // Suppress noisy unhandledRejection logs from socket libraries during jitter.
@@ -23,11 +24,6 @@ function suppressClientRejections() {
   if (suppressed) return;
   suppressed = true;
   process.on("unhandledRejection", () => {});
-}
-
-// Sleep N seconds for ramp + a small settling buffer before publishing starts.
-async function settleAfterRamp(p: JitterParams) {
-  await new Promise((r) => setTimeout(r, 5000));
 }
 
 // Tracks process RSS during the run; returns the peak observed.
@@ -160,6 +156,9 @@ export async function runJitterAnycable(
     });
     cable.on("close", () => {});
     cable.on("disconnect", () => {});
+    cable.on("connect", () => {
+      stat.everConnected = true;
+    });
     const channel = cable.streamFrom(p.stream);
     channel.on("message", (msg: unknown) => recordMsg(stat, msg));
     cables.push(cable);
@@ -167,7 +166,7 @@ export async function runJitterAnycable(
     await maybePauseForRamp(p, i, "jitter-ac");
   }
 
-  await settleAfterRamp(p);
+  await settleAfterRamp();
   console.log(`[jitter-ac] all ramped; starting publisher and jitter loop`);
 
   const publishTask = publish({
@@ -185,13 +184,19 @@ export async function runJitterAnycable(
       let next = Date.now() + (5 + Math.random() * p.jitterIntervalSec) * 1000;
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
-          stat.jitterCount++;
           // Force-close the underlying TCP socket — same semantics as
           // the Socket.io test (raw.terminate()). The cable's Monitor
           // detects the close and reconnects with its built-in backoff,
           // mirroring socket.io-client's retry path. Don't call
           // cable.connect() manually — let the reconnect machinery run.
-          terminateCableWs(cable);
+          //
+          // Only count the jitter event when terminate actually severed
+          // a connection. If the cable is already mid-reconnect (no `ws`
+          // ref), we skip the count so csrResumeRatePct denominators stay
+          // honest.
+          if (terminateCableWs(cable)) {
+            stat.jitterCount++;
+          }
           // Hold the "offline" window. Reconnect attempts may fire
           // during or after this window — that's the system under test.
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
@@ -268,7 +273,10 @@ export async function runJitterSocketio(
       reconnection: false,
       timeout: 10000,
     });
-    socket.on("connect", () => socket.emit("join", p.stream));
+    socket.on("connect", () => {
+      stat.everConnected = true;
+      socket.emit("join", p.stream);
+    });
     socket.on("connect_error", () => stat.failedConnects++);
     bindHandlers(socket, stat);
     sockets.push({ current: socket, stat });
@@ -276,7 +284,7 @@ export async function runJitterSocketio(
     await maybePauseForRamp(p, i, "jitter-sio");
   }
 
-  await settleAfterRamp(p);
+  await settleAfterRamp();
   console.log(`[jitter-sio] all ramped; starting publisher and jitter loop`);
 
   const publishTask = startSocketioPublishing(p, urls);
@@ -287,10 +295,15 @@ export async function runJitterSocketio(
       let next = Date.now() + (5 + Math.random() * p.jitterIntervalSec) * 1000;
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
-          entry.stat.jitterCount++;
-          if (!terminateUnderlyingTcp(entry.current)) {
-            entry.current.disconnect();
-          }
+          // Force-close the TCP layer if we can reach it; fall back to a
+          // library-level disconnect. Only count the event when something
+          // actually closed — a socket that's already mid-reconnect (no
+          // engine.transport.ws AND not currently connected) is a no-op
+          // both ways and shouldn't inflate jitterEvents.
+          const wasConnected = entry.current.connected;
+          const torn = terminateUnderlyingTcp(entry.current);
+          if (!torn && wasConnected) entry.current.disconnect();
+          if (torn || wasConnected) entry.stat.jitterCount++;
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
 
           // Default Socket.io has no resume protocol — open a fresh socket.
@@ -370,6 +383,7 @@ export async function runJitterSocketioCsr(
       timeout: 10000,
     });
     socket.on("connect", () => {
+      stat.everConnected = true;
       // CSR-resumed sockets have `recovered === true`; rooms are auto-rejoined.
       const recovered = (socket as unknown as { recovered?: boolean }).recovered;
       if (recovered) stat.recoveredCount++;
@@ -382,7 +396,7 @@ export async function runJitterSocketioCsr(
     await maybePauseForRamp(p, i, "jitter-csr");
   }
 
-  await settleAfterRamp(p);
+  await settleAfterRamp();
   console.log(`[jitter-csr] all ramped; starting publisher and jitter loop`);
 
   const publishTask = startSocketioPublishing(p, urls);
@@ -394,10 +408,14 @@ export async function runJitterSocketioCsr(
       let next = Date.now() + (5 + Math.random() * p.jitterIntervalSec) * 1000;
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
-          stat.jitterCount++;
           // socket.io-client's built-in reconnect machinery handles the
           // resume with pid + offset — we just close the TCP layer.
-          terminateUnderlyingTcp(socket);
+          // Only count the jitter when terminate actually severed
+          // something (sockets mid-reconnect have no engine.transport.ws)
+          // so csrResumeRatePct's denominator stays honest.
+          if (terminateUnderlyingTcp(socket)) {
+            stat.jitterCount++;
+          }
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
           next = Date.now() + (p.jitterIntervalSec + Math.random() * 5) * 1000;
         }

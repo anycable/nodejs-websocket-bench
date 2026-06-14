@@ -13,6 +13,8 @@
 import WebSocket from "ws";
 import { io as ioClient, Socket } from "socket.io-client";
 
+import { settleAfterRamp } from "./timing.js";
+
 // uWS idle: opens raw `ws` WebSocket against the uws-server's /ws path
 // (no subprotocol — uWS's App.ws() doesn't negotiate protocols), sends
 // the {type:"subscribe"} frame on open, holds, tears down. Same shape
@@ -66,7 +68,7 @@ export async function runIdleUws(
     }
   }
 
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   const rampElapsedMs = Date.now() - startedAt;
   console.log(
     `${tag} all ramped (${rampElapsedMs}ms): connected=${result.connected}/${p.n} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
@@ -184,7 +186,7 @@ export async function runIdleAnycable(
   }
 
   // Settle for a few seconds so welcome/subscribe acks land before reporting.
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   const rampElapsedMs = Date.now() - startedAt;
   console.log(
     `${tag} all ramped (${rampElapsedMs}ms): connected=${result.connected}/${p.n} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`
@@ -276,7 +278,7 @@ export async function runIdleSocketio(
     }
   }
 
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   const rampElapsedMs = Date.now() - startedAt;
   console.log(
     `${tag} all ramped (${rampElapsedMs}ms): connected=${result.connected}/${p.n} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed}`

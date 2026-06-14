@@ -27,6 +27,7 @@
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { percentile } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 
 export interface DeployImpactParams {
   n: number;
@@ -190,7 +191,7 @@ export async function runDeployImpactSocketio(
   }
 
   // Settle so straggler initial connects land
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   const rampElapsedMs = Date.now() - startedAt;
   console.log(
     `[deploy-impact] all ramped (${rampElapsedMs}ms): ${initiallyConnected}/${p.n} initial-connected`,

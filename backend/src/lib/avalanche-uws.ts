@@ -10,6 +10,7 @@
 import WebSocket from "ws";
 
 import { percentile } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 
 export interface AvalancheUwsParams {
   n: number;
@@ -166,7 +167,7 @@ export async function runAvalancheUws(
     }
   }
 
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   initialConnectDone = true;
   const rampElapsedMs = Date.now() - startedAt;
   console.log(

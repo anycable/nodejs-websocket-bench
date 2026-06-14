@@ -21,6 +21,7 @@ import { io as ioClient, Socket } from "socket.io-client";
 import { createCable } from "@anycable/core";
 
 import { percentile } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 
 export interface WhispersParams {
   n: number; // total clients
@@ -119,7 +120,7 @@ export async function runWhispersAnycable(
       }
     }
   }
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   console.log(
     `[whispers-ac] all ramped (${Date.now() - startedAt}ms): ${initiallyConnected}/${p.n} connected`,
   );
@@ -226,7 +227,7 @@ export async function runWhispersSocketio(
       }
     }
   }
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   console.log(
     `[whispers-sio] all ramped (${Date.now() - startedAt}ms): ${initiallyConnected}/${p.n} connected`,
   );
@@ -343,7 +344,7 @@ export async function runWhispersUws(
       }
     }
   }
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   console.log(
     `[whispers-uws] all ramped (${Date.now() - startedAt}ms): ${initiallyConnected}/${p.n} connected`,
   );

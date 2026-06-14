@@ -29,6 +29,7 @@ import { createCable } from "@anycable/core";
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 
 export type PublisherMode = "serial" | "pool" | "fireforget" | "nats";
 
@@ -64,10 +65,6 @@ function suppressClientRejections() {
   if (suppressed) return;
   suppressed = true;
   process.on("unhandledRejection", () => {});
-}
-
-async function settleAfterRamp() {
-  await new Promise((r) => setTimeout(r, 5000));
 }
 
 function trackPeakRss(): { stop: () => number } {
@@ -244,6 +241,9 @@ export async function runThroughputAnycable(
     });
     cable.on("close", () => {});
     cable.on("disconnect", () => {});
+    cable.on("connect", () => {
+      stat.everConnected = true;
+    });
     const channel = cable.streamFrom(p.stream);
     channel.on("message", (msg: unknown) => recordMsg(stat, msg));
     cables.push(cable);
@@ -321,6 +321,9 @@ export async function runThroughputAnycableCluster(
     });
     cable.on("close", () => {});
     cable.on("disconnect", () => {});
+    cable.on("connect", () => {
+      stat.everConnected = true;
+    });
     const channel = cable.streamFrom(p.stream);
     channel.on("message", (msg: unknown) => recordMsg(stat, msg));
     cables.push(cable);
@@ -483,7 +486,10 @@ export async function runThroughputSocketioRedis(
       timeout: 10000,
       reconnection: false,
     });
-    socket.on("connect", () => socket.emit("join", p.stream));
+    socket.on("connect", () => {
+      stat.everConnected = true;
+      socket.emit("join", p.stream);
+    });
     socket.on("connect_error", () => stat.failedConnects++);
     socket.on("message", (msg: unknown) => recordMsg(stat, msg));
     sockets.push(socket);
@@ -565,7 +571,10 @@ async function runSocketioCommon(
       timeout: 10000,
       ...options,
     });
-    socket.on("connect", () => socket.emit("join", p.stream));
+    socket.on("connect", () => {
+      stat.everConnected = true;
+      socket.emit("join", p.stream);
+    });
     socket.on("connect_error", () => stat.failedConnects++);
     socket.on("message", (msg: unknown) => recordMsg(stat, msg));
     sockets.push(socket);
@@ -636,6 +645,7 @@ export interface UwsUrls {
 function makeUwsClient(url: string, topic: string, stat: ClientStat): WebSocket {
   const ws = new WebSocket(url);
   ws.on("open", () => {
+    stat.everConnected = true;
     ws.send(JSON.stringify({ type: "subscribe", topic }));
   });
   ws.on("message", (data) => {

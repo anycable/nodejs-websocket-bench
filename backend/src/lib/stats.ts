@@ -10,6 +10,12 @@ export interface ClientStat {
   jitterCount: number;
   recoveredCount: number; // CSR only — number of socket.recovered=true reconnects
   failedConnects: number;
+  // Flipped to true once the client's first `connect` (or equivalent) lands.
+  // Used by summarize() to split the headline delivery rate from the
+  // connected-only delivery rate, so a run with N connect failures doesn't
+  // silently report a delivery rate capped below 100% as if every client
+  // had been live.
+  everConnected: boolean;
   latencies: number[]; // receivedAt - sentAt per message, in ms
 }
 
@@ -20,6 +26,7 @@ export function newStat(): ClientStat {
     jitterCount: 0,
     recoveredCount: 0,
     failedConnects: 0,
+    everConnected: false,
     latencies: [],
   };
 }
@@ -52,11 +59,21 @@ export interface JitterResult {
   label: string;
   elapsedMs: number;
   clients: number;
+  // Clients whose first `connect` event landed at least once during the
+  // run. Always <= clients. Equal to clients in healthy runs.
+  connectedClients: number;
   publishedMessages: number;
   expectedDeliveries: number;
   receivedDeliveries: number;
   lostDeliveries: number;
+  // Headline delivery rate, denominator = totalMessages × clients
+  // (i.e. capped below 100% by connect failures).
   deliveryRatePct: number;
+  // Delivery rate among clients that actually connected — denominator =
+  // totalMessages × connectedClients. Helps separate "the WS layer
+  // dropped messages" from "we couldn't even open enough sockets".
+  // null when connectedClients is 0.
+  deliveryRateOfConnectedPct: number | null;
   jitterEvents: number;
   avgJittersPerClient: number;
   csrResumes: number;
@@ -118,6 +135,7 @@ export function summarize(opts: SummarizeOptions): JitterResult {
   let jitters = 0;
   let recovered = 0;
   let failedConnects = 0;
+  let connected = 0;
   const allLatencies: number[] = [];
   let maxSeq = 0;
   for (const s of stats) {
@@ -126,6 +144,7 @@ export function summarize(opts: SummarizeOptions): JitterResult {
     jitters += s.jitterCount;
     recovered += s.recoveredCount;
     failedConnects += s.failedConnects;
+    if (s.everConnected) connected++;
     if (s.highestSeq > maxSeq) maxSeq = s.highestSeq;
     for (const v of s.latencies) allLatencies.push(v);
   }
@@ -134,6 +153,11 @@ export function summarize(opts: SummarizeOptions): JitterResult {
   // tail wouldn't move maxSeq even if they should have received those packets.
   const expected = totalMessages * stats.length;
   const deliveryRate = expected > 0 ? (received / expected) * 100 : 0;
+  // Connected-only delivery rate. Same numerator (every received message
+  // is a real delivery); denominator excludes clients that never connected.
+  const expectedConnected = totalMessages * connected;
+  const deliveryRateOfConnected =
+    expectedConnected > 0 ? (received / expectedConnected) * 100 : null;
 
   allLatencies.sort((a, b) => a - b);
   const lmin = allLatencies.length > 0 ? allLatencies[0] : 0;
@@ -152,11 +176,16 @@ export function summarize(opts: SummarizeOptions): JitterResult {
     label,
     elapsedMs,
     clients: stats.length,
+    connectedClients: connected,
     publishedMessages: maxSeq,
     expectedDeliveries: expected,
     receivedDeliveries: received,
     lostDeliveries: lost,
     deliveryRatePct: Number(deliveryRate.toFixed(2)),
+    deliveryRateOfConnectedPct:
+      deliveryRateOfConnected === null
+        ? null
+        : Number(deliveryRateOfConnected.toFixed(2)),
     jitterEvents: jitters,
     avgJittersPerClient: Number((jitters / Math.max(1, stats.length)).toFixed(1)),
     csrResumes: recovered,
@@ -208,6 +237,12 @@ export function mergeJitterResults(
   }
 
   const clients = shards.reduce((sum, s) => sum + s.clients, 0);
+  // Older shards (pre-everConnected) didn't report connectedClients; fall
+  // back to per-shard `clients` so the merged number stays meaningful.
+  const connectedClients = shards.reduce(
+    (sum, s) => sum + (s.connectedClients ?? s.clients),
+    0,
+  );
   const publishedMessages = shards.reduce(
     (max, s) => Math.max(max, s.publishedMessages),
     0,
@@ -248,16 +283,29 @@ export function mergeJitterResults(
 
   const deliveryRate =
     expectedDeliveries > 0 ? (receivedDeliveries / expectedDeliveries) * 100 : 0;
+  // Connected-only denominator. publishedMessages is the highest seq seen
+  // across shards (same as a single run), so it stands in for totalMessages
+  // when merging — every shard ran against the same publisher.
+  const expectedConnected = publishedMessages * connectedClients;
+  const deliveryRateOfConnected =
+    expectedConnected > 0
+      ? (receivedDeliveries / expectedConnected) * 100
+      : null;
 
   return {
     label,
     elapsedMs,
     clients,
+    connectedClients,
     publishedMessages,
     expectedDeliveries,
     receivedDeliveries,
     lostDeliveries,
     deliveryRatePct: Number(deliveryRate.toFixed(2)),
+    deliveryRateOfConnectedPct:
+      deliveryRateOfConnected === null
+        ? null
+        : Number(deliveryRateOfConnected.toFixed(2)),
     jitterEvents,
     avgJittersPerClient: Number(
       (jitterEvents / Math.max(1, clients)).toFixed(1),
@@ -310,6 +358,18 @@ export function formatHumanReport(label: string, r: JitterResult): string {
     `Messages received: ${r.receivedDeliveries}`,
     `Messages lost:     ${r.lostDeliveries}`,
     `Delivery rate:     ${r.deliveryRatePct}%`,
+  );
+  // Surface the connected-only rate only when it actually differs from
+  // the headline — otherwise it's just noise.
+  if (
+    r.deliveryRateOfConnectedPct !== null &&
+    r.connectedClients !== r.clients
+  ) {
+    lines.push(
+      `  of connected:    ${r.deliveryRateOfConnectedPct}% (${r.connectedClients}/${r.clients} connected)`,
+    );
+  }
+  lines.push(
     `Latency raw (ms):  avg=${r.latencyRawMs.avg}  p50=${r.latencyRawMs.p50}  p95=${r.latencyRawMs.p95}  p99=${r.latencyRawMs.p99}  max=${r.latencyRawMs.max}  (n=${r.latencySamples})`,
     `Latency over min:  avg=${r.latencyOverMinMs.avg}  p50=${r.latencyOverMinMs.p50}  p95=${r.latencyOverMinMs.p95}  p99=${r.latencyOverMinMs.p99}  max=${r.latencyOverMinMs.max}  (skew floor=${r.latencyOverMinMs.skewFloor}ms)`,
     `Client peak RSS:   ${r.runnerPeakRssMb} MB`

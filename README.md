@@ -164,7 +164,8 @@ anycable-go --port 8080 --broker=memory --presets=broker --public
 Run any of the three benches in a third terminal — each script publishes its own messages, so no separate publisher process is needed:
 
 ```bash
-# Default Socket.io (publishes via socketio-server's /publish-local — io.to().emit())
+# Default Socket.io (per-message POST to socketio-server's /_broadcast,
+# symmetric with how AnyCable is published)
 SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=60 \
   TOTAL_MESSAGES=60 INTERVAL_MS=500 \
   npm run bench:jitter:socketio
@@ -204,7 +205,7 @@ NUM_CLIENTS=1000 ANYCABLE_URL=ws://localhost:8080/cable \
 
 The 10K results above are produced by deploying the same source as **two Railway services** in one project:
 
-- `socketio-server` — the Socket.io server (also serves `/publish-local` to drive in-process publishing for jitter tests).
+- `socketio-server` — the Socket.io server. Serves `/_broadcast` for per-message HTTP publishing (the default jitter / throughput path, symmetric with AnyCable's `/_broadcast`) and `/publish-local` for in-process `io.to().emit()` publishing (diagnostic only — opt in via `publishViaServer: true` in the runner).
 - `bench-runner` — the bench runner; uses `*.railway.internal` to reach `socketio-server` and `anycable-go`.
 
 Plus a third existing service:
@@ -522,8 +523,12 @@ on container sizing.
 - **CSR adapter choice.** We benchmarked CSR with the default in-memory adapter. With Redis Streams or MongoDB the latency tail might shift; the docs note CSR is incompatible with Redis pub/sub specifically.
 - **Like-for-like transports.** Both Socket.io and AnyCable run with WebSocket-only — no long-polling fallback for Socket.io.
 - **AnyCable broker.** Benchmarks use the in-memory broker; production deployments typically use NATS or Redis to survive restarts and run multi-node.
-- **Latency clock skew.** Publisher and clients run in different processes, possibly different containers. We report both raw and min-normalized latency so cross-variant comparisons are unaffected by skew.
+- **Latency clock skew.** Publisher and clients run in different processes, possibly different containers. We report both raw and min-normalized latency so cross-variant comparisons are unaffected by skew. The headline replay-latency numbers on the compare page use the min-normalized view.
 - **Connection capacity ceiling.** The 50K result is anycable-go's *current* idle-connection demonstration — anycable-go itself wasn't saturated; we hit a TCP outbound port ceiling on the Node test client. Real ceiling on this Pro tier is higher.
+- **Per-config reconnect-backoff windows.** The jitter test force-closes each client's TCP socket every ~15 s; the runner sleeps `jitterDurationMs` (default 1 s) before letting the client try to come back. But how long the client is _actually_ offline depends on which library is reconnecting. Default Socket.io uses `reconnection: false` and we open a fresh socket after the sleep, so its offline window is ~1.0–1.5 s. Socket.io + CSR, AnyCable, and uWS all use their library's built-in backoff (~2.0–5.0 s), so their offline window is longer than the raw `jitterDurationMs` suggests. This shape matches what each library does in production by default; we don't normalize across them. As a result, default Socket.io's measured loss rate is conservative — under a CSR-style 2 s offline window it would be closer to 20–25% than the reported 13%.
+- **Single-shard client-side saturation.** One bench-runner saturates around ~50K subscribers — the bottleneck is the Node event-loop work, not memory. Tests above that count fan out across multiple bench-runner replicas via `bench/idle-multi.ts` / `bench/jitter-multi.ts`. If you run a single-shard test at >50K and get unexpectedly low receive counts, that's why; rerun with multi-shard.
+- **Randomized jitter timings are not seeded.** Inter-jitter delays, reconnect jitter, and whisper stagger all use unseeded `Math.random()`. Runs reproduce statistically but not bit-for-bit. If you rerun the manifest and see p99 a few ms different from a recorded baseline, that's expected; consult `tmp/v1.6.14-bench-results/runs/` for the run-history context.
+- **Delivery rate denominator.** `deliveryRatePct` divides received deliveries by `totalMessages × clients`, including clients that failed to connect. The result JSON also exposes `deliveryRateOfConnectedPct` (denominator excludes never-connected clients) so a run with N connect failures isn't silently capped below 100%. In healthy runs (`connectFailures: 0`) the two numbers are identical.
 
 ## About
 

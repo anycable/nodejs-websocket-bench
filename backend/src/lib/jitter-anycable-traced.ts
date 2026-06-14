@@ -27,6 +27,8 @@ import { ClientStat, JitterResult, newStat, recordMsg, summarize, percentile } f
 import type { JitterParams } from "./params.js";
 import type { AnycableUrls } from "./jitter-runners.js";
 
+import { settleAfterRamp } from "./timing.js";
+
 interface JitterCycleTrace {
   terminateAt: number;
   cableConnectAt?: number;
@@ -162,20 +164,22 @@ export async function runJitterAnycableTraced(
       logLevel: "error" as never,
     });
 
-    if (trace) {
-      // Cable-level reconnect: this fires when the cable's transport
-      // re-establishes the WebSocket and the AnyCable session is back.
-      // Note: `ev.reconnect` is true on automatic reconnects; the very
-      // first connect during ramp doesn't carry it.
-      cable.on("connect", (ev?: { reconnect?: boolean }) => {
-        if (!ev || !ev.reconnect) return;
-        const ts = Date.now() - startedAt;
-        const last = trace.jitterEvents[trace.jitterEvents.length - 1];
-        if (last && last.cableConnectAt === undefined) {
-          last.cableConnectAt = ts;
-        }
-      });
-    }
+    // Cable-level reconnect: this fires when the cable's transport
+    // re-establishes the WebSocket and the AnyCable session is back.
+    // Note: `ev.reconnect` is true on automatic reconnects; the very
+    // first connect during ramp doesn't carry it. We mark
+    // `stat.everConnected` on every connect so the connected-only
+    // delivery rate captures clients that came up at any point.
+    cable.on("connect", (ev?: { reconnect?: boolean }) => {
+      stat.everConnected = true;
+      if (!trace) return;
+      if (!ev || !ev.reconnect) return;
+      const ts = Date.now() - startedAt;
+      const last = trace.jitterEvents[trace.jitterEvents.length - 1];
+      if (last && last.cableConnectAt === undefined) {
+        last.cableConnectAt = ts;
+      }
+    });
 
     const channel = cable.streamFrom(p.stream);
     channel.on("message", (msg: unknown, meta?: unknown) => {
@@ -222,7 +226,7 @@ export async function runJitterAnycableTraced(
     }
   }
 
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   console.log(`[jitter-ac-traced] all ramped; starting publisher and jitter loop`);
 
   const publishTask = publish({

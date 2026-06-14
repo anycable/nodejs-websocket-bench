@@ -139,19 +139,17 @@ function attr(key: string, value: string | number | boolean): Attribute {
 // Stats helpers
 // -----------------------------------------------------------------------------
 
-function pct(values: number[], p: number): number {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p));
-  return sorted[idx];
-}
+// Single source of truth for percentile math lives in lib/stats.ts.
+// `percentile` expects a pre-sorted ascending array and `p` in [0, 100].
+import { percentile } from "./stats.js";
 
 function summarize(values: number[]): PhaseStats {
+  const sorted = [...values].sort((a, b) => a - b);
   return {
-    p50: pct(values, 0.5),
-    p95: pct(values, 0.95),
-    p99: pct(values, 0.99),
-    max: pct(values, 1.0),
+    p50: percentile(sorted, 50),
+    p95: percentile(sorted, 95),
+    p99: percentile(sorted, 99),
+    max: percentile(sorted, 100),
   };
 }
 

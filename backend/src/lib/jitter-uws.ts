@@ -19,6 +19,7 @@
 import WebSocket from "ws";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 import type { JitterParams } from "./params.js";
 
 let suppressed = false;
@@ -26,10 +27,6 @@ function suppressClientRejections() {
   if (suppressed) return;
   suppressed = true;
   process.on("unhandledRejection", () => {});
-}
-
-async function settleAfterRamp(_p: JitterParams) {
-  await new Promise((r) => setTimeout(r, 5000));
 }
 
 function trackPeakRss(): { stop: () => number } {
@@ -74,7 +71,8 @@ class ReconnectingWs {
     private url: string,
     private topic: string,
     private onMessage: (msg: string) => void,
-    private onFailedConnect: () => void
+    private onFailedConnect: () => void,
+    private onOpen?: () => void,
   ) {
     this.connect();
   }
@@ -92,6 +90,7 @@ class ReconnectingWs {
     this.ws = ws;
     ws.on("open", () => {
       this.attempts = 0;
+      this.onOpen?.();
       try {
         ws.send(JSON.stringify({ type: "subscribe", topic: this.topic }));
       } catch {
@@ -130,9 +129,16 @@ class ReconnectingWs {
     }, delay);
   }
 
-  terminate() {
-    if (this.ws && typeof this.ws.terminate === "function") this.ws.terminate();
-    else if (this.ws) this.ws.close();
+  // Returns true if there was a live socket to sever. False means the
+  // wrapper was already mid-reconnect / pre-open — caller should not count
+  // the event as a real jitter event (no disruption actually occurred).
+  terminate(): boolean {
+    if (!this.ws) return false;
+    const live = this.ws.readyState === this.ws.OPEN ||
+      this.ws.readyState === this.ws.CONNECTING;
+    if (typeof this.ws.terminate === "function") this.ws.terminate();
+    else this.ws.close();
+    return live;
   }
 
   close() {
@@ -227,13 +233,16 @@ export async function runJitterUws(
       },
       () => {
         stat.failedConnects++;
-      }
+      },
+      () => {
+        stat.everConnected = true;
+      },
     );
     clients.push(client);
     await maybePauseForRamp(p, i, "jitter-uws");
   }
 
-  await settleAfterRamp(p);
+  await settleAfterRamp();
   console.log(`[jitter-uws] all ramped; starting publisher and jitter loop`);
 
   const publishTask = startUwsPublishing(p, urls);
@@ -245,11 +254,14 @@ export async function runJitterUws(
       let next = Date.now() + (5 + Math.random() * p.jitterIntervalSec) * 1000;
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
-          stat.jitterCount++;
           // Force-close at the TCP layer — same semantics as the Socket.io
           // and AnyCable jitter tests. ReconnectingWs handles the bring-back
-          // with its built-in backoff.
-          client.terminate();
+          // with its built-in backoff. Only count when a live socket
+          // existed to sever; clients mid-reconnect would otherwise inflate
+          // jitterEvents without a real disruption.
+          if (client.terminate()) {
+            stat.jitterCount++;
+          }
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
           next = Date.now() + (p.jitterIntervalSec + Math.random() * 5) * 1000;
         }

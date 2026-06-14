@@ -23,6 +23,7 @@
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { percentile } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 
 export interface StandaloneDeployImpactParams {
   n: number;
@@ -152,7 +153,7 @@ export async function runStandaloneDeployImpactSocketio(
     }
   }
 
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   const rampElapsedMs = Date.now() - startedAt;
   console.log(
     `[standalone-deploy-impact] all ramped (${rampElapsedMs}ms): ${initiallyConnected}/${p.n} initial`,

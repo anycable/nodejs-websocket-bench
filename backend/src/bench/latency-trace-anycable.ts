@@ -47,6 +47,8 @@ import { WebSocket } from "ws";
 
 import { createCable } from "@anycable/core";
 
+import { percentile } from "../lib/stats.js";
+
 // -----------------------------------------------------------------------------
 // Config
 // -----------------------------------------------------------------------------
@@ -433,14 +435,17 @@ for (const t of traces.values()) {
   });
 }
 
-function pct(values: number[], p: number): number {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p));
-  return sorted[idx];
-}
+// Re-use the shared percentile implementation so this script and the
+// bench-runner endpoint produce bit-identical numbers at p99.
 function summarize(label: string, vs: number[]) {
-  return { label, p50: pct(vs, 0.5), p95: pct(vs, 0.95), p99: pct(vs, 0.99), max: pct(vs, 1.0) };
+  const sorted = [...vs].sort((a, b) => a - b);
+  return {
+    label,
+    p50: percentile(sorted, 50),
+    p95: percentile(sorted, 95),
+    p99: percentile(sorted, 99),
+    max: percentile(sorted, 100),
+  };
 }
 
 const phases = [

@@ -10,6 +10,7 @@
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { percentile } from "./stats.js";
+import { settleAfterRamp } from "./timing.js";
 
 export interface AvalancheParams {
   n: number;
@@ -129,7 +130,7 @@ export async function runAvalancheSocketio(
   }
 
   // Settle so straggler initial connects land.
-  await new Promise((r) => setTimeout(r, 5000));
+  await settleAfterRamp();
   initialConnectDone = true;
   const rampElapsedMs = Date.now() - startedAt;
   console.log(
