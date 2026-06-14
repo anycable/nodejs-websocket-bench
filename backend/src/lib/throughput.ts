@@ -108,18 +108,18 @@ function augment(
   };
 }
 
-// Wait for the server-side publish-local burst to finish. Sleep at least
-// total × intervalMs (the nominal publishing window), or 1s if interval
-// is sub-millisecond, then add the drain so any slow-tail receives land.
-async function waitForServerPublish(p: ThroughputParams) {
+// Wait the nominal server-side publish window (total × intervalMs, or 1s
+// floor if interval is sub-millisecond). Drain is intentionally NOT
+// included here; callers record publishingMs at the boundary and drain
+// after, so the math doesn't depend on which publisher path was used.
+async function waitForServerPublishWindow(p: ThroughputParams) {
   const nominalMs = Math.max(p.totalMessages * p.intervalMs, 1000);
   await new Promise((r) => setTimeout(r, nominalMs));
-  await new Promise((r) => setTimeout(r, p.drainSec * 1000));
 }
 
-// External-publisher path returns once the publisher loop has finished
-// dispatching; just wait drainSec for stragglers.
-async function waitForServerPublishExternal(p: ThroughputParams) {
+// Final wait after publishingMs is recorded — lets slow-tail receives
+// land before we tear down.
+async function drain(p: ThroughputParams) {
   await new Promise((r) => setTimeout(r, p.drainSec * 1000));
 }
 
@@ -259,7 +259,7 @@ export async function runThroughputAnycable(
   console.log(`[tp-ac] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
 
   // Drain — let any in-flight messages land before tearing down.
-  await new Promise((r) => setTimeout(r, p.drainSec * 1000));
+  await drain(p);
 
   for (const c of cables) {
     try { c.disconnect(); } catch { /* tear-down errors are not interesting */ }
@@ -345,8 +345,7 @@ export async function runThroughputAnycableCluster(
   const publishingMs = Date.now() - publishStart;
   console.log(`[tp-ac-cluster] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
 
-  // Drain
-  await new Promise((r) => setTimeout(r, p.drainSec * 1000));
+  await drain(p);
 
   for (const c of cables) {
     try { c.disconnect(); } catch { /* */ }
@@ -510,12 +509,9 @@ export async function runThroughputSocketioRedis(
   //     the WS layer are separate processes — the same shape AnyCable's
   //     HTTP pool=16 row uses, so the comparison becomes apples to apples.
   const publishStart = Date.now();
-  let publishingMs: number;
   const httpModes = new Set(["pool", "fireforget"]);
   if (httpModes.has(mode)) {
     await runSocketioRedisHttpPublisher(p, urls.subscriberUrlA, mode);
-    publishingMs = Date.now() - publishStart;
-    await new Promise((r) => setTimeout(r, p.drainSec * 1000));
   } else {
     const qs = new URLSearchParams({
       total: String(p.totalMessages),
@@ -527,9 +523,11 @@ export async function runThroughputSocketioRedis(
     } catch {
       /* publish kickoff failure surfaces as zero deliveries */
     }
-    await waitForServerPublish(p);
-    publishingMs = Date.now() - publishStart - p.drainSec * 1000;
+    await waitForServerPublishWindow(p);
   }
+  // Single boundary for publishingMs — drain after.
+  const publishingMs = Date.now() - publishStart;
+  await drain(p);
 
   for (const s of sockets) {
     try { s.disconnect(); } catch { /* */ }
@@ -596,7 +594,6 @@ async function runSocketioCommon(
     // from the WS server.
     console.log(`[${label}] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
     await runSocketioRedisHttpPublisher(p, urls.serverUrl, p.publisher!);
-    await waitForServerPublishExternal(p);
   } else {
     // In-process publisher: kickoff /publish-local on the WS server,
     // which runs its own emit loop. Same Node event loop as the WS
@@ -612,9 +609,12 @@ async function runSocketioCommon(
     } catch {
       /* publish kickoff failure surfaces as zero deliveries */
     }
-    await waitForServerPublish(p);
+    await waitForServerPublishWindow(p);
   }
-  const publishingMs = Date.now() - publishStart - p.drainSec * 1000;
+  // Single boundary for publishingMs — drain happens after so the
+  // outboundDeliveriesPerSec rate isn't deflated by drain idleness.
+  const publishingMs = Date.now() - publishStart;
+  await drain(p);
 
   for (const s of sockets) {
     try { s.disconnect(); } catch { /* */ }
@@ -692,7 +692,6 @@ export async function runThroughputUws(
   if (useHttpPublisher) {
     console.log(`[tp-uws] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
     await runSocketioRedisHttpPublisher(p, urls.serverHttpUrl, p.publisher!);
-    await waitForServerPublishExternal(p);
   } else {
     console.log(`[tp-uws] publisher=in-process (/publish-local)`);
     const qs = new URLSearchParams({
@@ -705,9 +704,11 @@ export async function runThroughputUws(
     } catch {
       /* */
     }
-    await waitForServerPublish(p);
+    await waitForServerPublishWindow(p);
   }
-  const publishingMs = Date.now() - publishStart - p.drainSec * 1000;
+  // Single boundary for publishingMs — drain after.
+  const publishingMs = Date.now() - publishStart;
+  await drain(p);
 
   for (const s of sockets) {
     try { s.close(); } catch { /* */ }

@@ -14,7 +14,7 @@ import { createCable } from "@anycable/core";
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
-import { settleAfterRamp } from "./timing.js";
+import { MIN_OFFLINE_MS, settleAfterRamp } from "./timing.js";
 import type { JitterParams } from "./params.js";
 
 // Suppress noisy unhandledRejection logs from socket libraries during jitter.
@@ -304,7 +304,19 @@ export async function runJitterSocketio(
           const torn = terminateUnderlyingTcp(entry.current);
           if (!torn && wasConnected) entry.current.disconnect();
           if (torn || wasConnected) entry.stat.jitterCount++;
-          await new Promise((r) => setTimeout(r, p.jitterDurationMs));
+          // Default Socket.io has `reconnection: false`, so the offline
+          // window is set entirely by us, not the library. Floor it to
+          // MIN_OFFLINE_MS so the four jitter configurations face the
+          // same disruption shape (CSR / AnyCable / uWS sit at ~2 s
+          // because their libraries' built-in backoff dominates over
+          // jitterDurationMs anyway). Without the floor, default
+          // Socket.io would be measured against a ~1 s window while
+          // the others see ~2–5 s — its loss rate would understate
+          // what a typical socket.io-client user with default
+          // `reconnection: true` settings would actually experience.
+          await new Promise((r) =>
+            setTimeout(r, Math.max(p.jitterDurationMs, MIN_OFFLINE_MS)),
+          );
 
           // Default Socket.io has no resume protocol — open a fresh socket.
           const fresh = ioClient(urls.serverUrl, {

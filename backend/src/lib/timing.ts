@@ -15,6 +15,18 @@
 
 export const SETTLE_AFTER_RAMP_MS = 5000;
 
+// Floor for the per-event offline window during jitter tests. Default
+// Socket.io uses `reconnection: false` and the runner opens a fresh
+// socket manually after the sleep, so without this floor its offline
+// window would be just `jitterDurationMs` (1 s by default). The other
+// configurations (CSR, AnyCable, uWS) are gated by their respective
+// client library's reconnect backoff, which sits in the 2–5 s range.
+// Pinning a 2 s floor on default Socket.io's manual fresh-socket path
+// keeps the four configurations measured against the same disruption
+// shape, so the delivery-rate comparison reflects protocol differences,
+// not reconnect-delay differences.
+export const MIN_OFFLINE_MS = 2000;
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }

@@ -67,11 +67,11 @@ export interface TestSpec {
 const TARGETS = {
   socketio: "http://socketio-server.railway.internal:3000",
   // CSR variant runs the same image with SOCKETIO_CSR=1 at boot. The
-  // service was renamed socketio-server-small → socketio-server-csr; we
-  // keep the old hostname here because Railway's internal DNS still
-  // points the old name at the live container and the new name hasn't
-  // resolved yet. Switch back to socketio-server-csr.railway.internal
-  // once DNS converges.
+  // Railway service is `socketio-server-csr` in the dashboard, but it's
+  // historically been routed under the `socketio-server-small`
+  // internal hostname. Railway's DNS still resolves the historical
+  // name and not the new one from inside the bench-runner; this is
+  // the working address.
   socketioCsr: "http://socketio-server-small.railway.internal:3000",
   uwsWs: "ws://uws-server.railway.internal:3000/ws",
   uwsHttp: "http://uws-server.railway.internal:3000",
