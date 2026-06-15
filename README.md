@@ -18,31 +18,27 @@ All numbers are from identical Railway infrastructure (same region, same Pro tie
 
 ### Delivery under jitter — 10,000 clients, 120 messages at 2/sec
 
-**Disruption profile.** Every client's TCP socket is force-closed every ~15 seconds; no clean close, the kind of failure WiFi drops produce. Each client is then offline for ~2 seconds before its first reconnect attempt completes (set by `MIN_OFFLINE_MS` for default Socket.io, by the client library's reconnect backoff for CSR / AnyCable / uWS). Over the test, each client experiences ~10 jitter events. With ~2 s of blind window per event, the cumulative offline window is ~13% of the publishing run.
+**Disruption profile.** Every client's TCP socket is force-closed every ~15 seconds; no clean close, the kind of failure WiFi drops produce. Each client is then offline for ~2 seconds before its first reconnect attempt completes (set by `MIN_OFFLINE_MS` for default Socket.io, by the client library's reconnect backoff for CSR / AnyCable / uWS). Over the 160 s test, each client experiences ~8 jitter events.
 
-> The numbers in the table below were measured against the previous 1 s offline window. After equalizing to ~2 s, default Socket.io's loss will be re-baselined; expected at ~20–25%, the structural picture (default loses messages, CSR/AnyCable don't) is unchanged.
-
-|                                  | Default Socket.io | Socket.io + CSR | AnyCable    |
-| -------------------------------- | ----------------- | ---------------- | ----------- |
-| Clients                          | 10,000            | 10,000           | 10,000      |
-| Expected deliveries              | 1,200,000         | 1,200,000        | 1,200,000   |
-| Jitter events                    | 98,889            | 103,430          | 83,862      |
-| **Deliveries lost**              | **150,642**       | **0**            | **0**       |
-| **Delivery rate**                | **87.41%**        | **100%**         | **100%**    |
-| CSR session resume rate          | n/a               | 99.5%            | n/a         |
-| Connect failures                 | 0                 | 0                | 0           |
-| **Replay latency p50** (over min) | 167 ms            | 279 ms           | 246 ms      |
-| **Replay latency p95**           | 1.19 s            | 4.92 s           | **0.68 s**  |
-| **Replay latency p99**           | 1.66 s            | **8.99 s**       | **1.04 s**  |
-| **Replay latency max**           | 2.29 s            | **12.03 s**      | 3.53 s      |
-| Server peak memory               | 676 MB (Node)     | 616 MB (Node)    | 1.65 GB (Go) |
-| Server peak CPU (of 32 vCPU)     | 0.74% (~0.24 vCPU) | 0.42% (~0.13 vCPU) | 0.98% (~0.31 vCPU) |
+|                                  | Default Socket.io | Socket.io + CSR | uWS         | AnyCable OSS | AnyCable Pro |
+| -------------------------------- | ----------------- | ---------------- | ----------- | ------------ | ------------ |
+| Clients                          | 10,000            | 10,000           | 10,000      | 10,000       | 10,000       |
+| Expected deliveries              | 1,200,000         | 1,200,000        | 1,200,000   | 1,200,000    | 1,200,000    |
+| Jitter events                    | 74,496            | 81,532           | 81,232      | 83,375       | 83,283       |
+| **Deliveries lost**              | **184,449**       | **0**            | **153,805** | **0**        | **0**        |
+| **Delivery rate**                | **84.55%**        | **100%**         | **87.03%**  | **100%**     | **100%**     |
+| CSR session resume rate          | n/a               | 99.7%            | n/a         | n/a          | n/a          |
+| Connect failures                 | 0                 | 0                | 0           | 0            | 0            |
+| **Replay latency p50** (raw)     | 106 ms            | 148 ms           | 92 ms       | 250 ms       | 261 ms       |
+| **Replay latency p95**           | 394 ms            | 1.97 s           | 0.72 s      | 4.10 s       | 4.10 s       |
+| **Replay latency p99**           | 1.07 s            | 4.58 s           | 1.72 s      | 6.14 s       | 6.15 s       |
+| **Replay latency max**           | 1.75 s            | 9.71 s           | 2.95 s      | 9.23 s       | 9.36 s       |
 
 **What the numbers mean.**
 
-- **Default Socket.io loses ~13% of messages.** The blind-window ratio matches almost exactly — nothing is delivered during the outage and nothing is recovered after. Per the [Socket.io delivery-guarantees doc](https://socket.io/docs/v4/delivery-guarantees), this is expected: *"if the connection is broken while an event is being sent, then there is no guarantee that the other side has received it."*
-- **Socket.io + CSR closes the delivery gap** but with a multi-second replay tail. p99 = 9 seconds, max = 12 seconds. CSR has [documented caveats](https://socket.io/docs/v4/connection-state-recovery): opt-in, "experimental", incompatible with the Redis pub/sub adapter, and state is lost on restart unless you use Redis Streams or MongoDB.
-- **AnyCable closes the delivery gap with a sub-second replay tail.** p99 = 1 second, max = 3.5 seconds — about 7× faster than CSR at the tail.
+- **At-most-once protocols lose ~13–16% of messages.** Default Socket.io and uWS both drop the broadcasts that landed during each client's 2 s offline window; with no replay, those messages are gone. Per the [Socket.io delivery-guarantees doc](https://socket.io/docs/v4/delivery-guarantees), this is expected: *"if the connection is broken while an event is being sent, then there is no guarantee that the other side has received it."* The loss rate is independent of the WS implementation: uWS's faster wire doesn't restore lost messages.
+- **Socket.io + CSR delivers 100%** with a replay tail of ~4.6 s p99, ~10 s max. CSR resumes ~99.7% of disconnects cleanly via its pid + offset protocol; the small fraction that fall back to live-from-now still get their messages on the next cycle within `maxDisconnectionDuration` (default 2 min). CSR has [documented caveats](https://socket.io/docs/v4/connection-state-recovery): opt-in, marked "experimental", incompatible with the Redis pub/sub adapter, and state is lost on restart unless you pair it with Redis Streams or MongoDB.
+- **AnyCable delivers 100%** with a replay tail of ~6.1 s p99, ~9.3 s max. The per-stream history protocol (epoch + offset) is heavier than CSR's per-socket buffer; in the in-memory comparison here CSR's tail is slightly shorter at p99. AnyCable's edge is elsewhere: it survives app deploys (separate Go process, your app restarts but connections don't), it scales horizontally via NATS or Redis without losing the replay guarantee, it supports native client-to-client whispers, it works under broader hardware budgets (~33 KB / conn OSS, ~19 KB / conn Pro vs Socket.io's per-process Node ceiling), and it slots into Ruby + Rails as easily as Node + Bun + Deno.
 
 ### Reconnection avalanche — 5,000 clients, single deploy
 

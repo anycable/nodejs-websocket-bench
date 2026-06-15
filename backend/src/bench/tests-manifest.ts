@@ -200,12 +200,13 @@ export const tests: TestSpec[] = [
     endpoint: "bench-jitter-socketio",
     mode: "async", // 160s + ramp; near Railway's 5-min cap
     params: { n: 10000, ...JITTER_10K, serverUrl: TARGETS.socketio, samplesCap: 5000 },
-    // As-measured today the server can only absorb ~25% of the reconnect
-    // storm; the page baseline of 87% was from a moment with more headroom
-    // on the Railway-shared infra. Wide threshold so day-to-day variance
-    // doesn't flag, but a real drop will still surface.
-    baseline: { deliveryRatePct: 27.5, "latencyRawMs.p95": 290 },
-    driftThresholdPct: 30,
+    // At-most-once protocol — each ~2 s offline window misses 3-4 broadcasts
+    // and they're gone (no replay). ~85% delivery is the steady-state under
+    // the symmetric 2 s window. The old 27% baseline reflected a tighter
+    // 1 s window where the reconnect storm also overwhelmed the server;
+    // both effects collapsed into one number.
+    baseline: { deliveryRatePct: 84, "latencyRawMs.p95": 450 },
+    driftThresholdPct: 15,
   },
   {
     id: "jitter-socketio-csr-10k",
@@ -214,11 +215,11 @@ export const tests: TestSpec[] = [
     endpoint: "bench-jitter-socketio-csr",
     mode: "async",
     params: { n: 10000, ...JITTER_10K, serverUrl: TARGETS.socketioCsr, samplesCap: 5000 },
-    // CSR's replay resumes ~20% of disconnects cleanly; the rest fall back
-    // to "live from now" so 75% delivery, 0 in-gap loss, but the p95/p99
-    // latency tail is huge because resumed messages carry replay delay.
-    baseline: { deliveryRatePct: 75.5, lostDeliveries: 0, "latencyRawMs.p95": 80000, csrResumes: 15000 },
-    driftThresholdPct: 30,
+    // CSR's protocol now resumes ~99.5% of disconnects cleanly with the
+    // symmetric 2 s offline window. Replay-tail p95 ~2 s (within the
+    // offline window itself), p99 ~4.5 s, max ~10 s.
+    baseline: { deliveryRatePct: 100, lostDeliveries: 0, "latencyRawMs.p95": 1970, csrResumes: 81000 },
+    driftThresholdPct: 15,
   },
   {
     id: "jitter-uws-10k",
@@ -227,10 +228,11 @@ export const tests: TestSpec[] = [
     endpoint: "bench-jitter-uws",
     mode: "async",
     params: { n: 10000, ...JITTER_10K, wsUrl: TARGETS.uwsWs, httpUrl: TARGETS.uwsHttp, samplesCap: 5000 },
-    // No connect failures but many clients silently drop their highestSeq;
-    // at-most-once + uws-server backpressure together. As-measured baseline.
-    baseline: { deliveryRatePct: 34.5, lostDeliveries: 134000 },
-    driftThresholdPct: 30,
+    // At-most-once like default Socket.io; ~87% delivery is the steady-state
+    // under the 2 s window. Slightly higher than default Socket.io because
+    // uWS's reconnect via ReconnectingWs has tighter backoff variance.
+    baseline: { deliveryRatePct: 87, lostDeliveries: 154000, "latencyRawMs.p95": 720 },
+    driftThresholdPct: 15,
   },
   {
     id: "jitter-anycable-oss-10k",
