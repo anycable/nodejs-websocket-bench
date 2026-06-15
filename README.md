@@ -1,10 +1,12 @@
 # AnyCable vs Socket.io Benchmarks
 
-Reproducible benchmarks behind [AnyCable vs Socket.io](https://anycable.io/compare/socket-io). Three questions:
+Reproducible benchmarks behind [AnyCable vs Socket.io](https://anycable.io/compare/nodejs-websocket). Three questions:
 
 1. **Delivery under jitter** — how many messages does each server actually deliver when clients experience real-world WiFi drops and cellular handoffs? And when delivery succeeds via replay, **how long does it take**?
 2. **Deploy resilience** — what happens to live WebSocket connections when you ship new code?
 3. **Connection capacity** — how many idle WebSocket connections can a single instance hold?
+
+For the methodology in narrative form (architectural choices, measurement traps, what we got wrong on first attempts, how we keep the numbers honest), see [`docs/methodology.md`](./docs/methodology.md).
 
 Three configurations are tested for question (1):
 
