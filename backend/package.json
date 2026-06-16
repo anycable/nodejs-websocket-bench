@@ -1,5 +1,5 @@
 {
-  "name": "anycable-benchmark",
+  "name": "nodejs-websocket-bench",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -21,6 +21,7 @@
     "bench:avalanche:uws": "tsx src/bench/avalanche-railway-uws.ts",
     "bench:idle:multi": "tsx src/bench/idle-multi.ts",
     "bench:jitter:multi": "tsx src/bench/jitter-multi.ts",
+    "bench:whispers:multi": "tsx src/bench/whispers-multi.ts",
     "bench:rebaseline": "tsx src/bench/rebaseline.ts",
     "bench:rebaseline:history": "tsx src/bench/rebaseline-history.ts",
     "bench:throughput:multi": "tsx src/bench/throughput-multi.ts",

@@ -4,11 +4,24 @@
 // endpoint, writes the result JSON to tmp/v1.6.14-bench-results/, and
 // prints a delta vs `baseline`. Pick a subset with FILTER=<substring>.
 //
-// Baselines are the "as-measured today" snapshot, not the page numbers
-// (the page numbers were taken under heavier Railway-shared infrastructure
-// load; latency baselines were uniformly ~50% lower at this refresh).
-// Update `baseline` here when the underlying setup changes or a real
-// drift gets accepted as the new floor.
+// IMPORTANT: `baseline` is NOT identical to the number printed on the
+// compare page.
+//   - Page numbers were captured during a Railway shared-tenant window
+//     where neighbour load pushed latencies higher. They represent the
+//     worst we measured under realistic shared-infra load (the cautious
+//     number a reader should assume).
+//   - Baselines below are what the same tests deliver on a quieter
+//     refresh. Latencies are uniformly ~50% better than the page; other
+//     fields (delivery rate, connections held) match.
+//
+// So a green rebaseline confirms "we still beat today's floor", which
+// is stricter than the page promises. A red rebaseline means we've
+// regressed below the better-than-page floor, which is a real signal
+// even if the page numbers still hold.
+//
+// Update `baseline` here when the underlying setup changes or an
+// accepted drift becomes the new floor. Refresh the page numbers in
+// tandem if the drift is in a worse direction.
 
 export type TestCategory =
   | "latency"
