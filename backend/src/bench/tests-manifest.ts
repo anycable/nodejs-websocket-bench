@@ -268,6 +268,14 @@ export const tests: TestSpec[] = [
 
   // -------------------------------------------------------------------------
   // Whispers (1K × 10 rooms, 100 peers/room)
+  //
+  // The single-shard variants below catch regressions in the driver +
+  // broker round-trip on a Node event loop that's pinned at ~200K msg/sec
+  // receive. They are NOT the page numbers for AnyCable / uWS latency:
+  // those come from `npm run bench:whispers:multi` (40 shards × 25 cables)
+  // so the driver isn't the bottleneck. Re-run the multi-shard driver
+  // by hand when the page row needs refreshing; this manifest tracks
+  // the single-shard regression floor.
   // -------------------------------------------------------------------------
   {
     id: "whispers-socketio-1k",
