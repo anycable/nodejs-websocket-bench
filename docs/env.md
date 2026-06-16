@@ -23,6 +23,7 @@ variable is unset.
 | `STREAM`             | `benchmark` / `avalanche`          | every script; stream name      |
 | `RAMP_RATE`          | `50`                               | every bench script; new connections per second |
 | `RESULTS_DIR`        | `results` (relative to cwd)        | scripts that write CSV / JSON; override to a path of your choice |
+| `BENCH_LOG_LEVEL`    | `info`                             | every runner; one of `silent`, `error`, `warn`, `info`, `debug`. `info` keeps lifecycle lines; `debug` adds per-1K ramp progress. |
 
 ## Servers
 

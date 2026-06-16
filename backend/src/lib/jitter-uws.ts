@@ -20,6 +20,7 @@ import WebSocket from "ws";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
 import { trackPeakRss } from "./peak-rss.js";
+import { log } from "./log.js";
 import { settleAfterRamp } from "./timing.js";
 import type { JitterParams } from "./params.js";
 
@@ -33,7 +34,7 @@ function suppressClientRejections() {
 async function maybePauseForRamp(p: JitterParams, i: number, label: string) {
   if ((i + 1) % p.rampPerSec === 0) {
     await new Promise((r) => setTimeout(r, 1000));
-    if ((i + 1) % 1000 === 0) console.log(`[${label}] ramped ${i + 1}/${p.n}`);
+    if ((i + 1) % 1000 === 0) log.debug(`[${label}] ramped ${i + 1}/${p.n}`);
   }
 }
 
@@ -196,7 +197,7 @@ export async function runJitterUws(
   urls: UwsUrls
 ): Promise<JitterResult> {
   suppressClientRejections();
-  console.log(`[jitter-uws] params=${JSON.stringify(p)}`);
+  log.info(`[jitter-uws] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -230,7 +231,7 @@ export async function runJitterUws(
   }
 
   await settleAfterRamp();
-  console.log(`[jitter-uws] all ramped; starting publisher and jitter loop`);
+  log.info(`[jitter-uws] all ramped; starting publisher and jitter loop`);
 
   const publishTask = startUwsPublishing(p, urls);
 
@@ -276,6 +277,6 @@ export async function runJitterUws(
     peakRssMb,
     samplesCap: p.samplesCap,
   });
-  console.log(`[jitter-uws] result: ${JSON.stringify(result)}`);
+  log.info(`[jitter-uws] result: ${JSON.stringify(result)}`);
   return result;
 }

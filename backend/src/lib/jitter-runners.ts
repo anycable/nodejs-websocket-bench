@@ -16,6 +16,7 @@ import { io as ioClient, Socket } from "socket.io-client";
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
 import { MIN_OFFLINE_MS, settleAfterRamp } from "./timing.js";
 import { trackPeakRss } from "./peak-rss.js";
+import { log } from "./log.js";
 import type { JitterParams } from "./params.js";
 
 // Suppress noisy unhandledRejection logs from socket libraries during jitter.
@@ -33,7 +34,7 @@ async function maybePauseForRamp(p: JitterParams, i: number, label: string) {
   if ((i + 1) % p.rampPerSec === 0) {
     await new Promise((r) => setTimeout(r, 1000));
     if ((i + 1) % 1000 === 0) {
-      console.log(`[${label}] ramped ${i + 1}/${p.n}`);
+      log.debug(`[${label}] ramped ${i + 1}/${p.n}`);
     }
   }
 }
@@ -123,7 +124,7 @@ export async function runJitterAnycable(
   urls: AnycableUrls
 ): Promise<JitterResult> {
   suppressClientRejections();
-  console.log(`[jitter-ac] params=${JSON.stringify(p)}`);
+  log.info(`[jitter-ac] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -154,7 +155,7 @@ export async function runJitterAnycable(
   }
 
   await settleAfterRamp();
-  console.log(`[jitter-ac] all ramped; starting publisher and jitter loop`);
+  log.info(`[jitter-ac] all ramped; starting publisher and jitter loop`);
 
   const publishTask = publish({
     url: urls.broadcastUrl,
@@ -213,7 +214,7 @@ export async function runJitterAnycable(
     peakRssMb,
     samplesCap: p.samplesCap,
   });
-  console.log(`[jitter-ac] result: ${JSON.stringify(result)}`);
+  log.info(`[jitter-ac] result: ${JSON.stringify(result)}`);
   return result;
 }
 
@@ -240,7 +241,7 @@ export async function runJitterSocketio(
   urls: SocketioUrls
 ): Promise<JitterResult> {
   suppressClientRejections();
-  console.log(`[jitter-sio] params=${JSON.stringify(p)}`);
+  log.info(`[jitter-sio] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -272,7 +273,7 @@ export async function runJitterSocketio(
   }
 
   await settleAfterRamp();
-  console.log(`[jitter-sio] all ramped; starting publisher and jitter loop`);
+  log.info(`[jitter-sio] all ramped; starting publisher and jitter loop`);
 
   const publishTask = startSocketioPublishing(p, urls);
 
@@ -349,7 +350,7 @@ export async function runJitterSocketio(
     peakRssMb,
     samplesCap: p.samplesCap,
   });
-  console.log(`[jitter-sio] result: ${JSON.stringify(result)}`);
+  log.info(`[jitter-sio] result: ${JSON.stringify(result)}`);
   return result;
 }
 
@@ -361,7 +362,7 @@ export async function runJitterSocketioCsr(
   urls: SocketioUrls
 ): Promise<JitterResult> {
   suppressClientRejections();
-  console.log(`[jitter-csr] params=${JSON.stringify(p)}`);
+  log.info(`[jitter-csr] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -396,7 +397,7 @@ export async function runJitterSocketioCsr(
   }
 
   await settleAfterRamp();
-  console.log(`[jitter-csr] all ramped; starting publisher and jitter loop`);
+  log.info(`[jitter-csr] all ramped; starting publisher and jitter loop`);
 
   const publishTask = startSocketioPublishing(p, urls);
 
@@ -440,7 +441,7 @@ export async function runJitterSocketioCsr(
     peakRssMb,
     samplesCap: p.samplesCap,
   });
-  console.log(`[jitter-csr] result: ${JSON.stringify(result)}`);
+  log.info(`[jitter-csr] result: ${JSON.stringify(result)}`);
   return result;
 }
 

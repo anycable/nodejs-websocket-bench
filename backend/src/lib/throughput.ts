@@ -31,6 +31,7 @@ import { io as ioClient, Socket } from "socket.io-client";
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
 import { settleAfterRamp } from "./timing.js";
 import { trackPeakRss } from "./peak-rss.js";
+import { log } from "./log.js";
 
 export type PublisherMode = "serial" | "pool" | "fireforget" | "nats";
 
@@ -72,7 +73,7 @@ function suppressClientRejections() {
 async function maybePauseForRamp(p: ThroughputParams, i: number, label: string) {
   if ((i + 1) % p.rampPerSec === 0) {
     await new Promise((r) => setTimeout(r, 1000));
-    if ((i + 1) % 1000 === 0) console.log(`[${label}] ramped ${i + 1}/${p.n}`);
+    if ((i + 1) % 1000 === 0) log.debug(`[${label}] ramped ${i + 1}/${p.n}`);
   }
 }
 
@@ -212,7 +213,7 @@ export async function runThroughputAnycable(
   urls: AnycableUrls
 ): Promise<ThroughputResult> {
   suppressClientRejections();
-  console.log(`[tp-ac] params=${JSON.stringify(p)}`);
+  log.info(`[tp-ac] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -239,12 +240,12 @@ export async function runThroughputAnycable(
   }
 
   await settleAfterRamp();
-  console.log(`[tp-ac] all ramped; starting publisher`);
+  log.info(`[tp-ac] all ramped; starting publisher`);
 
   const publishStart = Date.now();
   await runAnycablePublisher(p, urls);
   const publishingMs = Date.now() - publishStart;
-  console.log(`[tp-ac] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
+  log.info(`[tp-ac] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
 
   // Drain — let any in-flight messages land before tearing down.
   await drain(p);
@@ -262,7 +263,7 @@ export async function runThroughputAnycable(
     peakRssMb,
   });
   const result = augment(base, p, publishingMs);
-  console.log(`[tp-ac] result: ${JSON.stringify(result)}`);
+  log.info(`[tp-ac] result: ${JSON.stringify(result)}`);
   return result;
 }
 
@@ -290,7 +291,7 @@ export async function runThroughputAnycableCluster(
   urls: AnycableClusterUrls
 ): Promise<ThroughputResult> {
   suppressClientRejections();
-  console.log(`[tp-ac-cluster] params=${JSON.stringify(p)}`);
+  log.info(`[tp-ac-cluster] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -319,7 +320,7 @@ export async function runThroughputAnycableCluster(
   }
 
   await settleAfterRamp();
-  console.log(`[tp-ac-cluster] all ramped (A=${half}, B=${p.n - half}); starting publisher`);
+  log.info(`[tp-ac-cluster] all ramped (A=${half}, B=${p.n - half}); starting publisher`);
 
   const publishStart = Date.now();
   // Reuse runAnycablePublisher — supports HTTP serial/pool/fireforget and NATS modes.
@@ -331,7 +332,7 @@ export async function runThroughputAnycableCluster(
     natsSubject: urls.natsSubject,
   });
   const publishingMs = Date.now() - publishStart;
-  console.log(`[tp-ac-cluster] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
+  log.info(`[tp-ac-cluster] publisher done in ${publishingMs}ms (mode=${p.publisher ?? "serial"})`);
 
   await drain(p);
 
@@ -348,7 +349,7 @@ export async function runThroughputAnycableCluster(
     peakRssMb,
   });
   const result = augment(base, p, publishingMs);
-  console.log(`[tp-ac-cluster] result: ${JSON.stringify(result)}`);
+  log.info(`[tp-ac-cluster] result: ${JSON.stringify(result)}`);
   return result;
 }
 
@@ -456,7 +457,7 @@ export async function runThroughputSocketioRedis(
   urls: SocketioRedisUrls
 ): Promise<ThroughputResult> {
   suppressClientRejections();
-  console.log(`[tp-sio-redis] params=${JSON.stringify(p)} urls=${JSON.stringify(urls)}`);
+  log.info(`[tp-sio-redis] params=${JSON.stringify(p)} urls=${JSON.stringify(urls)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -485,7 +486,7 @@ export async function runThroughputSocketioRedis(
 
   await settleAfterRamp();
   const mode = p.publisher ?? "serial";
-  console.log(`[tp-sio-redis] all ramped (A=${half}, B=${p.n - half}); starting publisher (mode=${mode}) targeting A`);
+  log.info(`[tp-sio-redis] all ramped (A=${half}, B=${p.n - half}); starting publisher (mode=${mode}) targeting A`);
 
   // Two publisher shapes — selected by `?publisher=`:
   //   default ("serial" / "inproc"): bench-runner POSTs /publish-local once
@@ -530,7 +531,7 @@ export async function runThroughputSocketioRedis(
     peakRssMb,
   });
   const result = augment(base, p, publishingMs);
-  console.log(`[tp-sio-redis] result: ${JSON.stringify(result)}`);
+  log.info(`[tp-sio-redis] result: ${JSON.stringify(result)}`);
   return result;
 }
 
@@ -542,7 +543,7 @@ async function runSocketioCommon(
   options: Record<string, unknown>
 ): Promise<ThroughputResult> {
   suppressClientRejections();
-  console.log(`[${label}] params=${JSON.stringify(p)}`);
+  log.info(`[${label}] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -568,7 +569,7 @@ async function runSocketioCommon(
   }
 
   await settleAfterRamp();
-  console.log(`[${label}] all ramped; starting publisher`);
+  log.info(`[${label}] all ramped; starting publisher`);
 
   const publishStart = Date.now();
   const useHttpPublisher =
@@ -580,13 +581,13 @@ async function runSocketioCommon(
     // External HTTP publisher: bench-runner POSTs to /_broadcast.
     // This is the "standalone" shape — publisher is a separate process
     // from the WS server.
-    console.log(`[${label}] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
+    log.info(`[${label}] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
     await runSocketioRedisHttpPublisher(p, urls.serverUrl, p.publisher!);
   } else {
     // In-process publisher: kickoff /publish-local on the WS server,
     // which runs its own emit loop. Same Node event loop as the WS
     // fan-out.
-    console.log(`[${label}] publisher=in-process (/publish-local)`);
+    log.info(`[${label}] publisher=in-process (/publish-local)`);
     const qs = new URLSearchParams({
       total: String(p.totalMessages),
       interval: String(p.intervalMs),
@@ -617,7 +618,7 @@ async function runSocketioCommon(
     peakRssMb,
   });
   const result = augment(base, p, publishingMs);
-  console.log(`[${label}] result: ${JSON.stringify(result)}`);
+  log.info(`[${label}] result: ${JSON.stringify(result)}`);
   return result;
 }
 
@@ -654,7 +655,7 @@ export async function runThroughputUws(
   urls: UwsUrls
 ): Promise<ThroughputResult> {
   suppressClientRejections();
-  console.log(`[tp-uws] params=${JSON.stringify(p)}`);
+  log.info(`[tp-uws] params=${JSON.stringify(p)}`);
   const startedAt = Date.now();
   const rss = trackPeakRss();
 
@@ -669,7 +670,7 @@ export async function runThroughputUws(
   }
 
   await settleAfterRamp();
-  console.log(`[tp-uws] all ramped; starting publisher`);
+  log.info(`[tp-uws] all ramped; starting publisher`);
 
   const publishStart = Date.now();
   const useHttpPublisher =
@@ -678,10 +679,10 @@ export async function runThroughputUws(
     p.publisher === "serial";
 
   if (useHttpPublisher) {
-    console.log(`[tp-uws] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
+    log.info(`[tp-uws] publisher=${p.publisher} concurrency=${p.publisherConcurrency ?? 16} (external HTTP /_broadcast)`);
     await runSocketioRedisHttpPublisher(p, urls.serverHttpUrl, p.publisher!);
   } else {
-    console.log(`[tp-uws] publisher=in-process (/publish-local)`);
+    log.info(`[tp-uws] publisher=in-process (/publish-local)`);
     const qs = new URLSearchParams({
       total: String(p.totalMessages),
       interval: String(p.intervalMs),
@@ -711,6 +712,6 @@ export async function runThroughputUws(
     peakRssMb,
   });
   const result = augment(base, p, publishingMs);
-  console.log(`[tp-uws] result: ${JSON.stringify(result)}`);
+  log.info(`[tp-uws] result: ${JSON.stringify(result)}`);
   return result;
 }
