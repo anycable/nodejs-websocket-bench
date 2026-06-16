@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "test": "node --import tsx --test src/lib/*.test.ts",
     "start": "node dist/socketio/server.js",
     "dev:socketio": "tsx src/socketio/server.ts",
     "dev:socketio-csr": "SOCKETIO_CSR=1 tsx src/socketio/server.ts",
