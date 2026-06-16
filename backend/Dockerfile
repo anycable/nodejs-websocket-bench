@@ -3,10 +3,16 @@
 # bench-runner an in-process AnyCable throughput probe (embedded server,
 # loopback httptest.Server) for apples-to-apples comparison with the
 # Socket.io / uWS in-process emit() / publish() tests.
+#
+# Pinned to a specific commit on dev/benchi so the image stays
+# reproducible even if the branch moves or is rebased. Bump
+# ANYCABLE_BENCHI_SHA below when intentionally adopting a newer benchi.
 FROM golang:1.26-trixie AS benchi
+ARG ANYCABLE_BENCHI_SHA=211dd28712cd30c53005820dbd28277b61bdec50
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 --branch dev/benchi https://github.com/anycable/anycable.git /src/anycable
+RUN git clone https://github.com/anycable/anycable.git /src/anycable \
+    && git -C /src/anycable checkout ${ANYCABLE_BENCHI_SHA}
 WORKDIR /src/anycable/etc/benchi
 RUN CGO_ENABLED=0 go build -o /out/stress_publications ./scenarios/stress_publications
 
