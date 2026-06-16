@@ -24,6 +24,7 @@ import { Agent, setGlobalDispatcher } from "undici";
 import type { IdleResult } from "../lib/idle-runner.js";
 import { fetchMetric, readRailwayToken } from "../lib/railway-api.js";
 import { chart } from "../lib/chart.js";
+import { resultPath } from "../lib/results-dir.js";
 import { percentile } from "../lib/stats.js";
 
 // Each shard responds only after its full ramp + hold completes — at
@@ -239,7 +240,7 @@ console.log(`\nMemory: peak=${percentile(memValues, 100).toFixed(0)} MB  p95=${p
 console.log(`CPU:    peak=${percentile(cpuValues, 100).toFixed(2)} %   p95=${percentile(cpuValues, 95).toFixed(2)} %   avg=${(cpuValues.reduce((s, n) => s + n, 0) / Math.max(1, cpuValues.length)).toFixed(2)} %`);
 
 // CSV: tSec, mem_mb, cpu_pct (joined on closest sample timestamp).
-const csvPath = `idle-multi-${startedAt.toISOString().replace(/[:.]/g, "-")}.csv`;
+const csvPath = resultPath(`idle-multi-${startedAt.toISOString().replace(/[:.]/g, "-")}.csv`);
 const lines = ["t_sec,memory_mb,cpu_pct"];
 const allTs = Array.from(
   new Set([...memSeries.map((p) => p.tSec), ...cpuSeries.map((p) => p.tSec)])

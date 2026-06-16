@@ -22,12 +22,13 @@
 //   TARGET_ENV_ID=<environment uuid> \
 //     tsx src/bench/avalanche-multi-uws.ts
 
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import { percentile } from "../lib/stats.js";
 import type { AvalancheUwsResult } from "../lib/avalanche-uws.js";
+import { resultPath } from "../lib/results-dir.js";
 
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
@@ -240,8 +241,6 @@ const dump = {
   per_shard: ok_results,
   errors,
 };
-import("fs").then((fs) => {
-  const path = `avalanche-multi-uws-${startedAt.toISOString().replace(/[:.]/g, "-")}.json`;
-  fs.writeFileSync(path, JSON.stringify(dump, null, 2));
-  console.log(`\nWrote ${path}`);
-});
+const path = resultPath(`avalanche-multi-uws-${startedAt.toISOString().replace(/[:.]/g, "-")}.json`);
+writeFileSync(path, JSON.stringify(dump, null, 2));
+console.log(`\nWrote ${path}`);

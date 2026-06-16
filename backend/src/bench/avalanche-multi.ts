@@ -25,6 +25,7 @@ import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import type { AvalancheResult } from "../lib/avalanche-runner.js";
+import { resultPath } from "../lib/results-dir.js";
 
 // Same long timeout as idle-multi; each scale's POST blocks until the
 // avalanche cycle finishes on the bench-runner.
@@ -172,7 +173,7 @@ for (const r of results) {
   );
 }
 
-const csvPath = `avalanche-multi-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+const csvPath = resultPath(`avalanche-multi-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`);
 const lines = [
   "scale,initially_connected,disconnected,reconnected,recovery_ms,reconnect_p50_ms,reconnect_p95_ms,reconnect_p99_ms,reconnect_max_ms,never_reconnected,never_reconnected_pct,disconnect_spread_ms,total_elapsed_ms",
 ];

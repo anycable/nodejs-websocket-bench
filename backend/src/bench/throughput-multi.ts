@@ -34,6 +34,7 @@
 import { writeFileSync } from "node:fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { resultPath } from "../lib/results-dir.js";
 import { runShards, type ShardSpec } from "../lib/shard-coordinator.js";
 import {
   formatHumanReport,
@@ -192,7 +193,9 @@ try {
   );
   console.log(formatHumanReport(`Merged (${shardUrls.length} shards)`, merged));
 
-  const outPath = `throughput-multi-${protocol}-${shardUrls.length}x${perShardN}-${startedAt.toISOString().replace(/[:.]/g, "-")}.json`;
+  const outPath = resultPath(
+    `throughput-multi-${protocol}-${shardUrls.length}x${perShardN}-${startedAt.toISOString().replace(/[:.]/g, "-")}.json`,
+  );
   writeFileSync(
     outPath,
     JSON.stringify(

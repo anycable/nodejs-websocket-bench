@@ -9,10 +9,13 @@
 // Optional: CABLE_URL and BROADCAST_URL override the default targets
 // (e.g. point at anycable-go-pro).
 //
-// Output: jitter-trace-<timestamp>.json next to the cwd.
+// Output: backend/results/jitter-trace-<timestamp>.json
+// (override with RESULTS_DIR=).
 
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
+
+import { resultPath } from "../lib/results-dir.js";
 
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
@@ -98,6 +101,6 @@ console.log(`           p50=${m.direct.p50}ms  p95=${m.direct.p95}ms  p99=${m.di
 console.log(`  replay  ${m.replay.count.toLocaleString()} msgs`);
 console.log(`           p50=${m.replay.p50}ms  p95=${m.replay.p95}ms  p99=${m.replay.p99}ms  max=${m.replay.max}ms`);
 
-const path = `jitter-trace-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+const path = resultPath(`jitter-trace-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
 writeFileSync(path, JSON.stringify(result, null, 2));
 console.log(`\nWrote full trace: ${path}`);

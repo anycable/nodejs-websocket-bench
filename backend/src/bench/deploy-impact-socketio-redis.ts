@@ -24,6 +24,8 @@ import { spawnSync } from "child_process";
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { resultPath } from "../lib/results-dir.js";
+
 // Poll Railway deployment status for a specific service. Returns the
 // latest deployment whose createdAt is at-or-after `triggeredAtMs` and
 // whose status is SUCCESS. Returns null on timeout. Throws if the
@@ -114,7 +116,7 @@ const stream = process.env.STREAM || "deploy-impact";
 const settleBetweenSec = parseInt(process.env.SETTLE_BETWEEN_SEC || "20", 10);
 
 const tag = `deploy-impact-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-const outFile = `deploy-impact-socketio-redis-${tag}.json`;
+const outFile = resultPath(`deploy-impact-socketio-redis-${tag}.json`);
 
 console.log(`Deploy-impact benchmark — Socket.io + Redis adapter`);
 console.log(`  bench-runner: ${benchRunnerUrl}`);

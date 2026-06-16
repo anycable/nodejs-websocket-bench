@@ -22,6 +22,8 @@ import { spawnSync } from "child_process";
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { resultPath } from "../lib/results-dir.js";
+
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 }),
 );
@@ -44,7 +46,7 @@ const redeployFraction = parseFloat(
 );
 
 const tag = `standalone-deploy-impact-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-const outFile = `${tag}.json`;
+const outFile = resultPath(`${tag}.json`);
 
 console.log(`Standalone deploy-impact benchmark`);
 console.log(`  bench-runner:      ${benchRunnerUrl}`);

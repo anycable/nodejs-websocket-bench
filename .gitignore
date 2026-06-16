@@ -2,17 +2,11 @@ node_modules/
 dist/
 *.log
 
-# Outputs from `npm run bench:idle:multi`
-idle-multi-*.csv
-
-# Outputs from `npm run bench:avalanche:multi`
-avalanche-multi-*.csv
-
-# Outputs from `npm run bench:jitter:anycable:trace`
-jitter-trace-*.json
-
-# Stashed result JSONs from uWS test runs
-uws-*.json
+# Bench result outputs go in backend/results/. The directory is tracked
+# via .gitkeep so scripts can write into it on a fresh clone; the actual
+# result files (CSV/JSON) are ignored.
+backend/results/*
+!backend/results/.gitkeep
 
 # AnyCable Pro binaries are licensed and MUST NEVER be committed to this
 # public repo. These patterns match the asset names from the private
@@ -24,14 +18,3 @@ anycable-go-darwin-*
 anycable-go-windows-*
 anycable-go-mrb-*
 anycable-thruster-*
-.gstack/
-
-# Scratch result JSONs from local bench-runner driver invocations.
-backend/jitter-multi-*.json
-backend/whispers-*.json
-backend/deploy-impact-*.json
-
-# Ad-hoc sweep scripts; the manifest in src/bench/tests-manifest.ts is canonical.
-.standalone-throughput-sweep.sh
-.latency-sweep.sh
-.csr-test-queue.sh

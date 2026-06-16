@@ -11,6 +11,8 @@
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { resultPath } from "../lib/results-dir.js";
+
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 }),
 );
@@ -34,7 +36,7 @@ const durationSec = parseInt(process.env.DURATION_SEC || "30", 10);
 const payloadBytes = parseInt(process.env.PAYLOAD_BYTES || "64", 10);
 
 const tag = `whispers-${protocol}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-const outFile = `${tag}.json`;
+const outFile = resultPath(`${tag}.json`);
 
 console.log(`Whispers benchmark (${protocol})`);
 console.log(`  bench-runner: ${benchRunnerUrl}`);
