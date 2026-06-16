@@ -35,7 +35,7 @@
 //   N=2500 BROADCASTS=2000 INTERVAL_MS=50 \
 //   CABLE_URL=ws://anycable-go.railway.internal:8080/cable \
 //   BROADCAST_URL=http://anycable-go.railway.internal:8080/_broadcast \
-//   BROADCAST_KEY=benchsecret \
+//   BROADCAST_KEY=<anycable-go's ANYCABLE_HTTP_BROADCAST_SECRET> \
 //   OUTPUT=tmp/anycable-trace-{ts}.jsonl \
 //     tsx src/bench/latency-trace-anycable.ts
 
@@ -53,12 +53,21 @@ import { percentile } from "../lib/core/stats.js";
 // Config
 // -----------------------------------------------------------------------------
 
-const cableUrl =
-  process.env.CABLE_URL || "wss://anycable-go-production-24a4.up.railway.app/cable";
-const broadcastUrl =
-  process.env.BROADCAST_URL ||
-  "https://anycable-go-production-24a4.up.railway.app/_broadcast";
-const broadcastKey = process.env.BROADCAST_KEY || "benchsecret";
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) {
+    console.error(
+      `${name} is required.\n` +
+        "CABLE_URL, BROADCAST_URL, and BROADCAST_KEY all must be set.\n" +
+        "BROADCAST_KEY must match anycable-go's ANYCABLE_HTTP_BROADCAST_SECRET.",
+    );
+    process.exit(1);
+  }
+  return v;
+}
+const cableUrl = requireEnv("CABLE_URL");
+const broadcastUrl = requireEnv("BROADCAST_URL");
+const broadcastKey = requireEnv("BROADCAST_KEY");
 
 const N = parseInt(process.env.N || "2500", 10);
 const BROADCASTS = parseInt(process.env.BROADCASTS || "2000", 10);
