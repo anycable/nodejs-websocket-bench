@@ -5,6 +5,8 @@
 
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
+
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
 );
@@ -38,7 +40,7 @@ const startedAt = Date.now();
 console.log(
   `POST ${benchRunnerUrl}/bench-throughput-socketio-redis?n=${n}&total=${total}&intervalMs=${intervalMs}`
 );
-const res = await fetch(
+const res = await benchRunnerFetch(
   `${benchRunnerUrl}/bench-throughput-socketio-redis?${qs.toString()}`,
   { method: "POST" }
 );

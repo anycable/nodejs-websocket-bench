@@ -9,6 +9,8 @@
 
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
+
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
 );
@@ -43,7 +45,7 @@ if (httpUrl) qs.set("httpUrl", httpUrl);
 
 const startedAt = Date.now();
 console.log(`POST ${benchRunnerUrl}/bench-jitter-uws?${qs.toString().slice(0, 80)}...`);
-const res = await fetch(`${benchRunnerUrl}/bench-jitter-uws?${qs.toString()}`, {
+const res = await benchRunnerFetch(`${benchRunnerUrl}/bench-jitter-uws?${qs.toString()}`, {
   method: "POST",
 });
 if (!res.ok) {

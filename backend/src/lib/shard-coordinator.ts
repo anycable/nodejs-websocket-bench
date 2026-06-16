@@ -16,6 +16,8 @@
 
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "./bench-runner-client.js";
+
 // New-style bench-runners respond to enqueue POSTs sub-second; poll GETs
 // are similarly fast. But OLD bench-runners (pre-async-mode) ignore
 // ?async=1 and block the POST for the full test duration. Pad timeouts
@@ -95,7 +97,7 @@ async function enqueueShard(
   }
   const url = `${shard.url}/${shard.endpoint}?${qs.toString()}`;
   try {
-    const res = await fetch(url, { method: "POST" });
+    const res = await benchRunnerFetch(url, { method: "POST" });
     if (!res.ok) {
       return { error: `enqueue HTTP ${res.status} ${res.statusText}` };
     }
@@ -128,7 +130,7 @@ async function pollShard(
 ): Promise<JobStatusResponse | { error: string }> {
   const url = `${shard.url}/jobs/${jobId}?logLines=${logLines}`;
   try {
-    const res = await fetch(url);
+    const res = await benchRunnerFetch(url);
     if (!res.ok) {
       return { error: `poll HTTP ${res.status} ${res.statusText}` };
     }

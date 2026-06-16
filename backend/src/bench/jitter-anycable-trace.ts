@@ -15,6 +15,7 @@
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
 import { resultPath } from "../lib/results-dir.js";
 
 setGlobalDispatcher(
@@ -53,7 +54,7 @@ if (broadcastUrl) qs.set("broadcastUrl", broadcastUrl);
 
 const startedAt = Date.now();
 console.log(`POST ${benchRunnerUrl}/bench-jitter-anycable-traced?${qs.toString().slice(0, 80)}...`);
-const res = await fetch(
+const res = await benchRunnerFetch(
   `${benchRunnerUrl}/bench-jitter-anycable-traced?${qs.toString()}`,
   { method: "POST" }
 );

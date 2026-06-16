@@ -85,12 +85,36 @@ const UWS_HTTP_URL =
 const app = express();
 app.use(express.json());
 
+// Shared bearer-token gate for every /bench-* and /jobs/* endpoint.
+// `/health` stays open so Railway and uptime probes don't need the token.
+//
+// Without this, anyone who discovers the bench-runner's public Railway
+// domain can fire 1M-connection idle tests against our private infra
+// (and rack up the bill). Setting BENCH_RUNNER_TOKEN to empty disables
+// the check — only do that for an internal-only deployment with no
+// public domain.
+const BENCH_RUNNER_TOKEN = process.env.BENCH_RUNNER_TOKEN || "";
+const AUTH_OPEN_PATHS = new Set(["/health"]);
+
+app.use((req, res, next) => {
+  if (!BENCH_RUNNER_TOKEN) return next();
+  if (AUTH_OPEN_PATHS.has(req.path)) return next();
+  const header = req.get("authorization") || "";
+  const expected = `Bearer ${BENCH_RUNNER_TOKEN}`;
+  if (header !== expected) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  next();
+});
+
 app.get("/health", (_req, res) =>
   res.json({
     status: "ok",
     mode: "bench-runner",
     socketioUrl: SOCKETIO_URL,
     anycableUrl: ANYCABLE_URL,
+    authRequired: BENCH_RUNNER_TOKEN.length > 0,
   })
 );
 
@@ -449,93 +473,42 @@ app.post("/bench-deploy-impact-standalone-anycable", async (req, res) => {
 // via socket.to(room).emit(...) in a "whisper" handler on the server.
 // Query params:
 //   n=10000 rooms=100 ramp=200 interval=100 duration=30 payload=64
-app.post("/bench-whispers-anycable", async (req, res) => {
-  const n = parseInt((req.query.n as string) || "1000", 10);
-  const rooms = parseInt((req.query.rooms as string) || "10", 10);
-  const rampPerSec = parseInt((req.query.ramp as string) || "100", 10);
-  const whisperIntervalMs = parseInt(
-    (req.query.interval as string) || "100",
-    10,
-  );
-  const testDurationSec = parseInt(
-    (req.query.duration as string) || "30",
-    10,
-  );
-  const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
-  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+//   roomPrefix=<shared>     — multi-shard runs pass the same prefix to
+//                             every shard so peers fan out cross-shard
+//   samplesCap=5000         — include downsampled sorted latencies in
+//                             the result for cross-shard percentile merge
+function whispersParamsFromQuery(req: express.Request) {
+  const samplesCapEnv = parseInt((req.query.samplesCap as string) || "0", 10);
+  return {
+    n: parseInt((req.query.n as string) || "1000", 10),
+    rooms: parseInt((req.query.rooms as string) || "10", 10),
+    rampPerSec: parseInt((req.query.ramp as string) || "100", 10),
+    whisperIntervalMs: parseInt((req.query.interval as string) || "100", 10),
+    testDurationSec: parseInt((req.query.duration as string) || "30", 10),
+    payloadBytes: parseInt((req.query.payload as string) || "64", 10),
+    roomPrefix: (req.query.roomPrefix as string) || undefined,
+    samplesCap: samplesCapEnv > 0 ? samplesCapEnv : undefined,
+  };
+}
 
-  await respondAsync(req, res, () =>
-    runWhispersAnycable(
-      {
-        n,
-        rooms,
-        rampPerSec,
-        whisperIntervalMs,
-        testDurationSec,
-        payloadBytes,
-      },
-      cableUrl,
-    ),
-  );
+app.post("/bench-whispers-anycable", async (req, res) => {
+  const params = whispersParamsFromQuery(req);
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+  await respondAsync(req, res, () => runWhispersAnycable(params, cableUrl));
 });
 
 app.post("/bench-whispers-socketio", async (req, res) => {
-  const n = parseInt((req.query.n as string) || "1000", 10);
-  const rooms = parseInt((req.query.rooms as string) || "10", 10);
-  const rampPerSec = parseInt((req.query.ramp as string) || "100", 10);
-  const whisperIntervalMs = parseInt(
-    (req.query.interval as string) || "100",
-    10,
-  );
-  const testDurationSec = parseInt(
-    (req.query.duration as string) || "30",
-    10,
-  );
-  const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
+  const params = whispersParamsFromQuery(req);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-
-  await respondAsync(req, res, () =>
-    runWhispersSocketio(
-      {
-        n,
-        rooms,
-        rampPerSec,
-        whisperIntervalMs,
-        testDurationSec,
-        payloadBytes,
-      },
-      { serverUrl },
-    ),
-  );
+  await respondAsync(req, res, () => runWhispersSocketio(params, { serverUrl }));
 });
 
 app.post("/bench-whispers-uws", async (req, res) => {
-  const n = parseInt((req.query.n as string) || "1000", 10);
-  const rooms = parseInt((req.query.rooms as string) || "10", 10);
-  const rampPerSec = parseInt((req.query.ramp as string) || "100", 10);
-  const whisperIntervalMs = parseInt(
-    (req.query.interval as string) || "100",
-    10,
-  );
-  const testDurationSec = parseInt(
-    (req.query.duration as string) || "30",
-    10,
-  );
-  const payloadBytes = parseInt((req.query.payload as string) || "64", 10);
+  const params = whispersParamsFromQuery(req);
   const serverWsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
 
   await respondAsync(req, res, () =>
-    runWhispersUws(
-      {
-        n,
-        rooms,
-        rampPerSec,
-        whisperIntervalMs,
-        testDurationSec,
-        payloadBytes,
-      },
-      { serverWsUrl },
-    ),
+    runWhispersUws(params, { serverWsUrl }),
   );
 });
 

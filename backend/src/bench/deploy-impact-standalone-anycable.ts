@@ -21,6 +21,7 @@ import { spawnSync } from "child_process";
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
 import { resultPath } from "../lib/results-dir.js";
 
 setGlobalDispatcher(
@@ -64,7 +65,7 @@ const url = `${benchRunnerUrl}/bench-deploy-impact-standalone-anycable?${qs.toSt
 
 const benchPromise = (async () => {
   console.log(`POST ${url}`);
-  const r = await fetch(url, { method: "POST" });
+  const r = await benchRunnerFetch(url, { method: "POST" });
   if (!r.ok) {
     throw new Error(`bench-runner returned HTTP ${r.status}`);
   }

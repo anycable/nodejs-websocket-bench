@@ -11,6 +11,7 @@
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
 import { resultPath } from "../lib/results-dir.js";
 
 setGlobalDispatcher(
@@ -65,7 +66,7 @@ const url = `${benchRunnerUrl}/bench-whispers-${protocol}?${qs.toString()}`;
 console.log(`POST ${url}\n`);
 
 const startedAt = Date.now();
-const res = await fetch(url, { method: "POST" });
+const res = await benchRunnerFetch(url, { method: "POST" });
 if (!res.ok) {
   console.error(`bench-runner returned HTTP ${res.status}`);
   process.exit(1);

@@ -25,6 +25,7 @@ import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import type { AvalancheResult } from "../lib/avalanche-runner.js";
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
 import { resultPath } from "../lib/results-dir.js";
 
 // Same long timeout as idle-multi; each scale's POST blocks until the
@@ -104,7 +105,7 @@ async function runOneScale(n: number): Promise<ScaleRow | null> {
   if (serverUrl) qs.set("serverUrl", serverUrl);
 
   const startedAt = Date.now();
-  const responsePromise = fetch(
+  const responsePromise = benchRunnerFetch(
     `${benchRunnerUrl}/bench-avalanche-socketio?${qs.toString()}`,
     { method: "POST" }
   );

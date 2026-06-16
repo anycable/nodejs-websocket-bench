@@ -29,6 +29,7 @@ import { Agent, setGlobalDispatcher } from "undici";
 import { tests, type TestSpec } from "./tests-manifest.js";
 import { runShards, type ShardSpec } from "../lib/shard-coordinator.js";
 import { fetchMetric, readRailwayToken } from "../lib/railway-api.js";
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
 
 // Railway project that hosts the bench targets. Hardcoded because it's
 // stable across runs; can override with PROJECT_ID for a different env.
@@ -417,7 +418,7 @@ async function runAvalancheWithRedeploy(
   for (const [k, v] of Object.entries(spec.params)) qs.set(k, String(v));
   const url = `${baseUrl}/${spec.endpoint}?${qs.toString()}`;
 
-  const res = await fetch(url, { method: "POST" });
+  const res = await benchRunnerFetch(url, { method: "POST" });
   if (!res.ok) {
     throw new Error(`enqueue HTTP ${res.status} ${res.statusText}`);
   }
@@ -445,7 +446,7 @@ async function runAvalancheWithRedeploy(
   let lastLog = "";
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 5000));
-    const pollRes = await fetch(`${baseUrl}/jobs/${jobId}?logLines=10`);
+    const pollRes = await benchRunnerFetch(`${baseUrl}/jobs/${jobId}?logLines=10`);
     if (!pollRes.ok) continue;
     const poll = (await pollRes.json()) as {
       status: string;
@@ -480,7 +481,7 @@ async function runTest(spec: TestSpec, baseUrl: string): Promise<unknown> {
   for (const [k, v] of Object.entries(spec.params)) qs.set(k, String(v));
   const url = `${baseUrl}/${spec.endpoint}?${qs.toString()}`;
 
-  const res = await fetch(url, { method: "POST" });
+  const res = await benchRunnerFetch(url, { method: "POST" });
   if (!res.ok) {
     throw new Error(`enqueue HTTP ${res.status} ${res.statusText}`);
   }
@@ -496,7 +497,7 @@ async function runTest(spec: TestSpec, baseUrl: string): Promise<unknown> {
   let lastLog = "";
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 5000));
-    const pollRes = await fetch(`${baseUrl}/jobs/${jobId}?logLines=10`);
+    const pollRes = await benchRunnerFetch(`${baseUrl}/jobs/${jobId}?logLines=10`);
     if (!pollRes.ok) {
       // Transient HTTP errors during a long bench shouldn't kill the run.
       continue;

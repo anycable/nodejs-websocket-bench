@@ -13,6 +13,8 @@
 
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
+
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
 );
@@ -44,7 +46,7 @@ if (broadcastUrl) qs.set("broadcastUrl", broadcastUrl);
 
 const startedAt = Date.now();
 console.log(`POST ${benchRunnerUrl}/bench-throughput-anycable?n=${n}&total=${total}&intervalMs=${intervalMs}`);
-const res = await fetch(`${benchRunnerUrl}/bench-throughput-anycable?${qs.toString()}`, {
+const res = await benchRunnerFetch(`${benchRunnerUrl}/bench-throughput-anycable?${qs.toString()}`, {
   method: "POST",
 });
 if (!res.ok) {

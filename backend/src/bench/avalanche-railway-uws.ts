@@ -17,6 +17,8 @@
 
 import { Agent, setGlobalDispatcher } from "undici";
 
+import { benchRunnerFetch } from "../lib/bench-runner-client.js";
+
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
 );
@@ -47,7 +49,7 @@ console.log(`    railway redeploy -s uws-server --yes`);
 console.log(`    (or: -s uws-server-small for the small-box test)\n`);
 
 const startedAt = Date.now();
-const res = await fetch(`${benchRunnerUrl}/bench-avalanche-uws?${qs.toString()}`, {
+const res = await benchRunnerFetch(`${benchRunnerUrl}/bench-avalanche-uws?${qs.toString()}`, {
   method: "POST",
 });
 if (!res.ok) {
