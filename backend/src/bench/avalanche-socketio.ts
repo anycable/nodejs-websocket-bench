@@ -10,7 +10,7 @@
 import { io, Socket } from "socket.io-client";
 import { spawn, ChildProcess } from "child_process";
 
-import { percentile } from "../lib/stats.js";
+import { percentile } from "../lib/core/stats.js";
 
 const numClients = parseInt(process.env.NUM_CLIENTS || "1000");
 const rampRate = parseInt(process.env.RAMP_RATE || "50");

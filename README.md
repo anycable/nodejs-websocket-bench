@@ -114,10 +114,7 @@ benchmark/
         │   ├── tests-manifest.ts                # Canonical list of every rebaseline test
         │   ├── rebaseline.ts                    # Walk manifest, regress vs baselines, exit non-zero on drift
         │   └── rebaseline-history.ts            # Print per-metric trend across past rebaseline runs
-        └── lib/                        # Shared core — single source of truth
-            ├── params.ts                        # Param parsing (env or query-string)
-            ├── stats.ts                         # ClientStat, percentiles, summarize
-            ├── timing.ts                        # MIN_OFFLINE_MS + ramp settle helpers
+        └── lib/                        # Shared core, runners at top + foundational helpers in core/
             ├── jitter-runners.ts                # runJitter{Anycable,Socketio,SocketioCsr}
             ├── jitter-uws.ts                    # runJitterUws (parallel for shape with above)
             ├── jitter-anycable-traced.ts        # AnyCable jitter + per-cable timeline trace
@@ -130,13 +127,19 @@ benchmark/
             ├── throughput.ts                    # Throughput runners (all 6 protocols)
             ├── idle-runner.ts                   # Idle-connection capacity runner
             ├── anycable-trace.ts                # Phase-decomposed AnyCable broadcast latency
-            ├── chart.ts                         # ASCII chart helpers for the metrics dumps
-            ├── shard-coordinator.ts             # Multi-shard fan-out + result merger
-            ├── job-queue.ts                    # bench-runner async job state
-            ├── bench-runner-client.ts          # Driver-side bearer-token fetch wrapper
-            ├── results-dir.ts                  # CSV/JSON output path helper (writes go to backend/results/)
-            ├── railway-api.ts                  # Railway GraphQL: tokens, metrics, mutations
-            └── (driver-side composes the above)
+            └── core/                            # Foundational helpers; every runner imports from here
+                ├── params.ts                        # Param parsing (env or query-string)
+                ├── stats.ts                         # ClientStat, percentiles, summarize
+                ├── stats.test.ts                    # Unit tests; npm test runs them
+                ├── timing.ts                        # MIN_OFFLINE_MS + ramp settle helpers
+                ├── peak-rss.ts                      # Polling RSS peak tracker (per-test)
+                ├── log.ts                           # Leveled logger (BENCH_LOG_LEVEL)
+                ├── results-dir.ts                   # CSV/JSON output path helper (backend/results/)
+                ├── chart.ts                         # ASCII chart helpers for the metrics dumps
+                ├── bench-runner-client.ts           # Driver-side bearer-token fetch wrapper
+                ├── job-queue.ts                     # bench-runner async job state
+                ├── shard-coordinator.ts             # Multi-shard fan-out + result merger
+                └── railway-api.ts                   # Railway GraphQL: tokens, metrics, mutations
 ```
 
 ## Two run modes

@@ -22,8 +22,8 @@
 
 import { io as ioClient, Socket } from "socket.io-client";
 
-import { percentile } from "./stats.js";
-import { settleAfterRamp } from "./timing.js";
+import { percentile } from "./core/stats.js";
+import { settleAfterRamp } from "./core/timing.js";
 
 export interface StandaloneDeployImpactParams {
   n: number;

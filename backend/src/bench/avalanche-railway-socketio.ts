@@ -15,7 +15,7 @@
 
 import { io, Socket } from "socket.io-client";
 
-import { percentile } from "../lib/stats.js";
+import { percentile } from "../lib/core/stats.js";
 
 const url = process.env.SOCKETIO_URL;
 if (!url) {

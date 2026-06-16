@@ -15,8 +15,8 @@
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
-import { benchRunnerFetch } from "../lib/bench-runner-client.js";
-import { resultPath } from "../lib/results-dir.js";
+import { benchRunnerFetch } from "../lib/core/bench-runner-client.js";
+import { resultPath } from "../lib/core/results-dir.js";
 
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })

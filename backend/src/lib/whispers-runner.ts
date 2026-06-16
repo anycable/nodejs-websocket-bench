@@ -20,8 +20,8 @@ import { WebSocket } from "ws";
 import { io as ioClient, Socket } from "socket.io-client";
 import { createCable } from "@anycable/core";
 
-import { percentile } from "./stats.js";
-import { settleAfterRamp } from "./timing.js";
+import { downsampleSorted, percentile } from "./core/stats.js";
+import { settleAfterRamp } from "./core/timing.js";
 
 export interface WhispersParams {
   n: number; // total clients
@@ -30,6 +30,15 @@ export interface WhispersParams {
   whisperIntervalMs: number; // each client whispers every N ms
   testDurationSec: number; // hold + measure window
   payloadBytes: number; // size of the whisper payload in bytes
+  // When set, room names become `${roomPrefix}-${i % rooms}` instead of
+  // the default `whisper-room-${i % rooms}`. Multi-shard drivers pass a
+  // shared per-run prefix so every shard's clients land in the same rooms
+  // (fan-out crosses shards via the broker, bench-runner load per shard
+  // drops to ~total / numShards).
+  roomPrefix?: string;
+  // When set, the result includes up to `samplesCap` sorted latency
+  // samples for downstream merging. Linear-interpolated downsample.
+  samplesCap?: number;
 }
 
 export interface WhispersResult {
@@ -44,6 +53,9 @@ export interface WhispersResult {
   deliveryRatePct: number;
   latencyMs: { p50: number; p95: number; p99: number; max: number };
   totalElapsedMs: number;
+  // Set when WhispersParams.samplesCap is positive. Used by the multi-shard
+  // coordinator to recompute global percentiles across shards.
+  latencySamplesSorted?: number[];
 }
 
 interface ClientStat {
@@ -97,7 +109,7 @@ export async function runWhispersAnycable(
     cable.on("disconnect", () => {});
     cable.on("close", () => {});
 
-    const room = `whisper-room-${i % p.rooms}`;
+    const room = `${p.roomPrefix ?? "whisper-room"}-${i % p.rooms}`;
     const channel = cable.streamFrom(room);
     channel.on("message", (msg: unknown) => {
       const data =
@@ -196,7 +208,7 @@ export async function runWhispersSocketio(
     };
     stats.push(stat);
 
-    const room = `whisper-room-${i % p.rooms}`;
+    const room = `${p.roomPrefix ?? "whisper-room"}-${i % p.rooms}`;
     roomNames.push(room);
 
     const socket = ioClient(urls.serverUrl, {
@@ -300,7 +312,7 @@ export async function runWhispersUws(
     };
     stats.push(stat);
 
-    const topic = `whisper-room-${i % p.rooms}`;
+    const topic = `${p.roomPrefix ?? "whisper-room"}-${i % p.rooms}`;
     topicNames.push(topic);
 
     const ws = new WebSocket(urls.serverWsUrl);
@@ -443,6 +455,9 @@ function summarize(
       max: percentile(allLatencies, 100),
     },
     totalElapsedMs: Date.now() - startedAt,
+    latencySamplesSorted: p.samplesCap
+      ? downsampleSorted(allLatencies, p.samplesCap)
+      : undefined,
   };
 }
 

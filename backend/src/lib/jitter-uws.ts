@@ -18,11 +18,11 @@
 
 import WebSocket from "ws";
 
-import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
-import { trackPeakRss } from "./peak-rss.js";
-import { log } from "./log.js";
-import { settleAfterRamp } from "./timing.js";
-import type { JitterParams } from "./params.js";
+import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./core/stats.js";
+import { trackPeakRss } from "./core/peak-rss.js";
+import { log } from "./core/log.js";
+import { settleAfterRamp } from "./core/timing.js";
+import type { JitterParams } from "./core/params.js";
 
 let suppressed = false;
 function suppressClientRejections() {

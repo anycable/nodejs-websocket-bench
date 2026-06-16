@@ -34,13 +34,13 @@
 import { writeFileSync } from "node:fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
-import { resultPath } from "../lib/results-dir.js";
-import { runShards, type ShardSpec } from "../lib/shard-coordinator.js";
+import { resultPath } from "../lib/core/results-dir.js";
+import { runShards, type ShardSpec } from "../lib/core/shard-coordinator.js";
 import {
   formatHumanReport,
   mergeJitterResults,
   type JitterResult,
-} from "../lib/stats.js";
+} from "../lib/core/stats.js";
 
 // Throughput runs are bounded by the slowest shard; bump fetch timeouts
 // past Railway's proxy ceiling so the coordinator never times out before

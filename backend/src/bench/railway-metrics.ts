@@ -13,8 +13,8 @@
 // over the window. Useful for "what was the server doing while the
 // benchmark ran" reports.
 
-import { percentile } from "../lib/stats.js";
-import { fetchMetric, readRailwayToken, DataPoint } from "../lib/railway-api.js";
+import { percentile } from "../lib/core/stats.js";
+import { fetchMetric, readRailwayToken, DataPoint } from "../lib/core/railway-api.js";
 
 const projectId = process.env.PROJECT_ID;
 const serviceId = process.env.SERVICE_ID;

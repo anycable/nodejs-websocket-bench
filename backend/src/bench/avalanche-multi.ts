@@ -25,8 +25,8 @@ import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import type { AvalancheResult } from "../lib/avalanche-runner.js";
-import { benchRunnerFetch } from "../lib/bench-runner-client.js";
-import { resultPath } from "../lib/results-dir.js";
+import { benchRunnerFetch } from "../lib/core/bench-runner-client.js";
+import { resultPath } from "../lib/core/results-dir.js";
 
 // Same long timeout as idle-multi; each scale's POST blocks until the
 // avalanche cycle finishes on the bench-runner.

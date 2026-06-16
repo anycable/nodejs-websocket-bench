@@ -13,11 +13,11 @@ import WebSocket from "ws";
 import { createCable } from "@anycable/core";
 import { io as ioClient, Socket } from "socket.io-client";
 
-import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
-import { MIN_OFFLINE_MS, settleAfterRamp } from "./timing.js";
-import { trackPeakRss } from "./peak-rss.js";
-import { log } from "./log.js";
-import type { JitterParams } from "./params.js";
+import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./core/stats.js";
+import { MIN_OFFLINE_MS, settleAfterRamp } from "./core/timing.js";
+import { trackPeakRss } from "./core/peak-rss.js";
+import { log } from "./core/log.js";
+import type { JitterParams } from "./core/params.js";
 
 // Suppress noisy unhandledRejection logs from socket libraries during jitter.
 // Done once, regardless of how many runners get invoked.

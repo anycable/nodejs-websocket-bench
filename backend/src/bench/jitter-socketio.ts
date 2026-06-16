@@ -12,9 +12,9 @@
 // trigger an in-process io.to().emit() loop on socketio-server instead
 // (diagnostic only — isolates in-process fan-out cost).
 
-import { paramsFromEnv } from "../lib/params.js";
+import { paramsFromEnv } from "../lib/core/params.js";
 import { runJitterSocketio } from "../lib/jitter-runners.js";
-import { formatHumanReport } from "../lib/stats.js";
+import { formatHumanReport } from "../lib/core/stats.js";
 
 const params = paramsFromEnv();
 

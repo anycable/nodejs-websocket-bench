@@ -9,9 +9,9 @@
 //   SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=50 DURATION=150 \
 //     tsx src/bench/jitter-socketio-csr.ts
 
-import { paramsFromEnv } from "../lib/params.js";
+import { paramsFromEnv } from "../lib/core/params.js";
 import { runJitterSocketioCsr } from "../lib/jitter-runners.js";
-import { formatHumanReport } from "../lib/stats.js";
+import { formatHumanReport } from "../lib/core/stats.js";
 
 const params = paramsFromEnv();
 

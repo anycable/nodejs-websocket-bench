@@ -22,10 +22,10 @@ import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import type { IdleResult } from "../lib/idle-runner.js";
-import { fetchMetric, readRailwayToken } from "../lib/railway-api.js";
-import { chart } from "../lib/chart.js";
-import { resultPath } from "../lib/results-dir.js";
-import { percentile } from "../lib/stats.js";
+import { fetchMetric, readRailwayToken } from "../lib/core/railway-api.js";
+import { chart } from "../lib/core/chart.js";
+import { resultPath } from "../lib/core/results-dir.js";
+import { percentile } from "../lib/core/stats.js";
 
 // Each shard responds only after its full ramp + hold completes — at
 // 50K-per-shard with a 120s hold, that's ~5 minutes per request. Bump

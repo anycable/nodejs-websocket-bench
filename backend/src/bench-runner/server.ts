@@ -17,9 +17,9 @@
 import express from "express";
 import { spawn } from "node:child_process";
 
-import { getJob, startJob } from "../lib/job-queue.js";
+import { getJob, startJob } from "../lib/core/job-queue.js";
 
-import { paramsFromQuery } from "../lib/params.js";
+import { paramsFromQuery } from "../lib/core/params.js";
 import {
   runJitterAnycable,
   runJitterSocketio,

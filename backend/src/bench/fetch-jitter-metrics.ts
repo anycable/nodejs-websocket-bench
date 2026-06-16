@@ -4,8 +4,8 @@
 // Usage:
 //   tsx src/bench/fetch-jitter-metrics.ts
 
-import { fetchMetric, readRailwayToken } from "../lib/railway-api.js";
-import { percentile } from "../lib/stats.js";
+import { fetchMetric, readRailwayToken } from "../lib/core/railway-api.js";
+import { percentile } from "../lib/core/stats.js";
 
 const PROJECT_ID = "fd842a43-8d78-48c0-879f-4b5311c8c004";
 const SVC = {

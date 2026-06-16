@@ -24,8 +24,8 @@ import { spawnSync } from "child_process";
 import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
-import { benchRunnerFetch } from "../lib/bench-runner-client.js";
-import { resultPath } from "../lib/results-dir.js";
+import { benchRunnerFetch } from "../lib/core/bench-runner-client.js";
+import { resultPath } from "../lib/core/results-dir.js";
 
 // Poll Railway deployment status for a specific service. Returns the
 // latest deployment whose createdAt is at-or-after `triggeredAtMs` and

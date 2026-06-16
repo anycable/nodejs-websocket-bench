@@ -7,9 +7,9 @@
 //   NUM_CLIENTS=50 DURATION=150 \
 //     tsx src/bench/jitter-anycable.ts
 
-import { paramsFromEnv } from "../lib/params.js";
+import { paramsFromEnv } from "../lib/core/params.js";
 import { runJitterAnycable } from "../lib/jitter-runners.js";
-import { formatHumanReport } from "../lib/stats.js";
+import { formatHumanReport } from "../lib/core/stats.js";
 
 const params = paramsFromEnv();
 

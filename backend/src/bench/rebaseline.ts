@@ -27,9 +27,9 @@ import { spawn } from "node:child_process";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import { tests, type TestSpec } from "./tests-manifest.js";
-import { runShards, type ShardSpec } from "../lib/shard-coordinator.js";
-import { fetchMetric, readRailwayToken } from "../lib/railway-api.js";
-import { benchRunnerFetch } from "../lib/bench-runner-client.js";
+import { runShards, type ShardSpec } from "../lib/core/shard-coordinator.js";
+import { fetchMetric, readRailwayToken } from "../lib/core/railway-api.js";
+import { benchRunnerFetch } from "../lib/core/bench-runner-client.js";
 
 // Railway project that hosts the bench targets. Hardcoded because it's
 // stable across runs; can override with PROJECT_ID for a different env.

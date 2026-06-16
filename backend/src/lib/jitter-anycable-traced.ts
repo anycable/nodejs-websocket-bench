@@ -23,12 +23,12 @@
 import WebSocket from "ws";
 import { createCable } from "@anycable/core";
 
-import { ClientStat, JitterResult, newStat, recordMsg, summarize, percentile } from "./stats.js";
-import type { JitterParams } from "./params.js";
+import { ClientStat, JitterResult, newStat, recordMsg, summarize, percentile } from "./core/stats.js";
+import type { JitterParams } from "./core/params.js";
 import type { AnycableUrls } from "./jitter-runners.js";
 
-import { settleAfterRamp } from "./timing.js";
-import { trackPeakRss } from "./peak-rss.js";
+import { settleAfterRamp } from "./core/timing.js";
+import { trackPeakRss } from "./core/peak-rss.js";
 
 interface JitterCycleTrace {
   terminateAt: number;

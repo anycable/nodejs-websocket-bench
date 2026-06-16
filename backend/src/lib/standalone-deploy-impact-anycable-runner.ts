@@ -16,8 +16,8 @@
 import { WebSocket } from "ws";
 import { createCable } from "@anycable/core";
 
-import { percentile } from "./stats.js";
-import { settleAfterRamp } from "./timing.js";
+import { percentile } from "./core/stats.js";
+import { settleAfterRamp } from "./core/timing.js";
 
 export interface StandaloneDeployImpactAnycableParams {
   n: number;

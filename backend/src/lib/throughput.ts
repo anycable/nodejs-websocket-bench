@@ -28,10 +28,10 @@ import { connect as natsConnect, StringCodec, NatsConnection } from "nats";
 import { createCable } from "@anycable/core";
 import { io as ioClient, Socket } from "socket.io-client";
 
-import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
-import { settleAfterRamp } from "./timing.js";
-import { trackPeakRss } from "./peak-rss.js";
-import { log } from "./log.js";
+import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./core/stats.js";
+import { settleAfterRamp } from "./core/timing.js";
+import { trackPeakRss } from "./core/peak-rss.js";
+import { log } from "./core/log.js";
 
 export type PublisherMode = "serial" | "pool" | "fireforget" | "nats";
 

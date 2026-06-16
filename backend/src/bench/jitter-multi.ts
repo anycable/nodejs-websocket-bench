@@ -25,12 +25,12 @@
 import { writeFileSync } from "node:fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
-import { runShards, type ShardSpec } from "../lib/shard-coordinator.js";
+import { runShards, type ShardSpec } from "../lib/core/shard-coordinator.js";
 import {
   formatHumanReport,
   mergeJitterResults,
   type JitterResult,
-} from "../lib/stats.js";
+} from "../lib/core/stats.js";
 
 // The coordinator does short polls, but the cumulative wait is bounded by
 // the longest shard. Push the default fetch timeouts up so the enqueue +

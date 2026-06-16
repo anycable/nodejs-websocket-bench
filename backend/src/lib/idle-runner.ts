@@ -13,7 +13,7 @@
 import WebSocket from "ws";
 import { io as ioClient, Socket } from "socket.io-client";
 
-import { settleAfterRamp } from "./timing.js";
+import { settleAfterRamp } from "./core/timing.js";
 
 // uWS idle: opens raw `ws` WebSocket against the uws-server's /ws path
 // (no subprotocol — uWS's App.ws() doesn't negotiate protocols), sends

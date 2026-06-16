@@ -141,7 +141,7 @@ function attr(key: string, value: string | number | boolean): Attribute {
 
 // Single source of truth for percentile math lives in lib/stats.ts.
 // `percentile` expects a pre-sorted ascending array and `p` in [0, 100].
-import { percentile } from "./stats.js";
+import { percentile } from "./core/stats.js";
 
 function summarize(values: number[]): PhaseStats {
   const sorted = [...values].sort((a, b) => a - b);

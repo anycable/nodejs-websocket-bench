@@ -47,7 +47,7 @@ import { WebSocket } from "ws";
 
 import { createCable } from "@anycable/core";
 
-import { percentile } from "../lib/stats.js";
+import { percentile } from "../lib/core/stats.js";
 
 // -----------------------------------------------------------------------------
 // Config

@@ -26,9 +26,9 @@ import { readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { Agent, setGlobalDispatcher } from "undici";
 
-import { percentile } from "../lib/stats.js";
+import { percentile } from "../lib/core/stats.js";
 import type { AvalancheUwsResult } from "../lib/avalanche-uws.js";
-import { resultPath } from "../lib/results-dir.js";
+import { resultPath } from "../lib/core/results-dir.js";
 
 setGlobalDispatcher(
   new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
