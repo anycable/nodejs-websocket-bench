@@ -19,6 +19,7 @@
 import WebSocket from "ws";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
+import { trackPeakRss } from "./peak-rss.js";
 import { settleAfterRamp } from "./timing.js";
 import type { JitterParams } from "./params.js";
 
@@ -27,20 +28,6 @@ function suppressClientRejections() {
   if (suppressed) return;
   suppressed = true;
   process.on("unhandledRejection", () => {});
-}
-
-function trackPeakRss(): { stop: () => number } {
-  let peak = process.memoryUsage().rss;
-  const handle = setInterval(() => {
-    const rss = process.memoryUsage().rss;
-    if (rss > peak) peak = rss;
-  }, 5000);
-  return {
-    stop() {
-      clearInterval(handle);
-      return peak / 1024 / 1024;
-    },
-  };
 }
 
 async function maybePauseForRamp(p: JitterParams, i: number, label: string) {

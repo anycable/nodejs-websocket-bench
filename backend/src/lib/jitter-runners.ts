@@ -15,6 +15,7 @@ import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
 import { MIN_OFFLINE_MS, settleAfterRamp } from "./timing.js";
+import { trackPeakRss } from "./peak-rss.js";
 import type { JitterParams } from "./params.js";
 
 // Suppress noisy unhandledRejection logs from socket libraries during jitter.
@@ -26,20 +27,6 @@ function suppressClientRejections() {
   process.on("unhandledRejection", () => {});
 }
 
-// Tracks process RSS during the run; returns the peak observed.
-function trackPeakRss(): { stop: () => number } {
-  let peak = process.memoryUsage().rss;
-  const handle = setInterval(() => {
-    const rss = process.memoryUsage().rss;
-    if (rss > peak) peak = rss;
-  }, 5000);
-  return {
-    stop() {
-      clearInterval(handle);
-      return peak / 1024 / 1024;
-    },
-  };
-}
 
 // Pace ramp-up at `rampPerSec` new connections per second.
 async function maybePauseForRamp(p: JitterParams, i: number, label: string) {

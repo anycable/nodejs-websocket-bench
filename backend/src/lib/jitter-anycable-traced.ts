@@ -28,6 +28,7 @@ import type { JitterParams } from "./params.js";
 import type { AnycableUrls } from "./jitter-runners.js";
 
 import { settleAfterRamp } from "./timing.js";
+import { trackPeakRss } from "./peak-rss.js";
 
 interface JitterCycleTrace {
   terminateAt: number;
@@ -144,6 +145,7 @@ export async function runJitterAnycableTraced(
   console.log(`[jitter-ac-traced] params=${JSON.stringify(p)} traceSample=${sampleSize}`);
 
   const startedAt = Date.now();
+  const rss = trackPeakRss();
   const stats: ClientStat[] = [];
   const cables: ReturnType<typeof createCable>[] = [];
   // Sparse: only the first `sampleSize` cables get a trace object.
@@ -320,7 +322,7 @@ export async function runJitterAnycableTraced(
     totalMessages: p.totalMessages,
     stats,
     elapsedMs: Date.now() - startedAt,
-    peakRssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    peakRssMb: Math.round(rss.stop()),
   });
 
   const directShareOfTotal =

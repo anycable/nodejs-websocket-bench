@@ -30,6 +30,7 @@ import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./stats.js";
 import { settleAfterRamp } from "./timing.js";
+import { trackPeakRss } from "./peak-rss.js";
 
 export type PublisherMode = "serial" | "pool" | "fireforget" | "nats";
 
@@ -67,19 +68,6 @@ function suppressClientRejections() {
   process.on("unhandledRejection", () => {});
 }
 
-function trackPeakRss(): { stop: () => number } {
-  let peak = process.memoryUsage().rss;
-  const handle = setInterval(() => {
-    const rss = process.memoryUsage().rss;
-    if (rss > peak) peak = rss;
-  }, 5000);
-  return {
-    stop() {
-      clearInterval(handle);
-      return peak / 1024 / 1024;
-    },
-  };
-}
 
 async function maybePauseForRamp(p: ThroughputParams, i: number, label: string) {
   if ((i + 1) % p.rampPerSec === 0) {
