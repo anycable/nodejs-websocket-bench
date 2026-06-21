@@ -95,11 +95,12 @@ const TARGETS = {
     "http://anycable-go-pro.railway.internal:8080/_broadcast",
   // socketioxide is the Rust implementation of the Socket.io protocol.
   // Wire-compatible with socket.io-client, so the existing bench-runner
-  // `bench-jitter-socketio`/`-csr` endpoints work as-is with
-  // `?serverUrl=<this>`. Default service ships SOCKETIO_CSR=0; the CSR
-  // variant deploys the same image with SOCKETIO_CSR=1 set at boot.
+  // bench-jitter-socketio / bench-idle-socketio / bench-avalanche-socketio
+  // endpoints work with ?serverUrl=. No CSR variant yet — the library
+  // doesn't appear to ship Connection State Recovery as of 0.18.3.
+  // See docs/socketioxide-comparison.md for the open question to the
+  // library author.
   socketioxide: "http://socketioxide-server.railway.internal:3000",
-  socketioxideCsr: "http://socketioxide-server-csr.railway.internal:3000",
 };
 
 // Common knobs reused across tests. Keep these explicit so the manifest
@@ -230,24 +231,6 @@ export const tests: TestSpec[] = [
     params: { n: 10000, ...LATENCY_10K, serverUrl: TARGETS.socketioxide },
     baseline: {},
   },
-  {
-    id: "latency-socketioxide-csr-1k",
-    description: "Roundtrip latency, socketioxide + CSR, 1K subs",
-    category: "latency",
-    endpoint: "bench-jitter-socketio-csr",
-    mode: "sync",
-    params: { n: 1000, ...LATENCY_1K, serverUrl: TARGETS.socketioxideCsr },
-    baseline: {},
-  },
-  {
-    id: "latency-socketioxide-csr-10k",
-    description: "Roundtrip latency, socketioxide + CSR, 10K subs",
-    category: "latency",
-    endpoint: "bench-jitter-socketio-csr",
-    mode: "sync",
-    params: { n: 10000, ...LATENCY_10K, serverUrl: TARGETS.socketioxideCsr },
-    baseline: {},
-  },
 
   // -------------------------------------------------------------------------
   // Reliability (jitter under WiFi-drop pattern)
@@ -311,25 +294,16 @@ export const tests: TestSpec[] = [
     params: { n: 10000, ...JITTER_10K, cableUrl: TARGETS.anycablePro, broadcastUrl: TARGETS.anycableProBroadcast, samplesCap: 5000 },
     baseline: { deliveryRatePct: 100, lostDeliveries: 0, "latencyRawMs.p95": 4100, "latencyRawMs.p99": 6200 },
   },
-  // socketioxide jitter rows. Default (no CSR) should land in the
-  // at-most-once band with Socket.io and uWS; the CSR row tests whether
-  // the Rust impl delivers 100% with a different replay-tail shape.
+  // socketioxide jitter row. Expected to land in the at-most-once band
+  // with default Socket.io and uWS, since socketioxide doesn't appear to
+  // ship CSR. Confirms the architectural claim across runtimes.
   {
     id: "jitter-socketioxide-10k",
-    description: "Reliability under WiFi jitter, socketioxide default, 10K",
+    description: "Reliability under WiFi jitter, socketioxide (Rust), 10K",
     category: "jitter",
     endpoint: "bench-jitter-socketio",
     mode: "async",
     params: { n: 10000, ...JITTER_10K, serverUrl: TARGETS.socketioxide, samplesCap: 5000 },
-    baseline: {},
-  },
-  {
-    id: "jitter-socketioxide-csr-10k",
-    description: "Reliability under WiFi jitter, socketioxide + CSR, 10K",
-    category: "jitter",
-    endpoint: "bench-jitter-socketio-csr",
-    mode: "async",
-    params: { n: 10000, ...JITTER_10K, serverUrl: TARGETS.socketioxideCsr, samplesCap: 5000 },
     baseline: {},
   },
 
