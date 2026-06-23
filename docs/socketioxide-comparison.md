@@ -208,20 +208,50 @@ mechanism is sound at moderate scale; the 10K row shows where it breaks.
 Raw numbers: `backend/results/railway-phase1/` (per-test JSON) and
 `backend/results/socketioxide-railway-2026-06-23.json` (summary).
 
-### Still pending: idle 1M + avalanche
+### Idle connection capacity @ ~600K (phase 2, 2026-06-23)
 
-The connection-capacity (idle 1M) and avalanche-escalation rows need the
-50-shard bench-runner fleet woken and, for avalanche, real redeploys of
-`socketioxide-server` mid-test. Deferred to a phase 2. To run them later,
-wake the fleet (see [`railway-ops.md`](./railway-ops.md)) and:
+50-shard fleet woken, both targets sized 32 GB / 32 vCPU, each ramped
+toward 1M idle socket.io/cable connections.
 
-```bash
-cd backend
-BENCH_RUNNER_URL=https://bench-runner-production.up.railway.app \
-BENCH_RUNNER_TOKEN=<token> \
-FILTER=socketioxide,anycable INCLUDE_IDLE=1 INCLUDE_AVALANCHE=1 \
-  npm run bench:rebaseline
-```
+**The harness capped before either server did.** Both socketioxide and
+anycable-go held ~600K and then the bench-runner shards ran out of
+client-side capacity (~12K socket.io/cable clients per shard, well under
+the ~50K port limit, so the shards' own event loops / memory were the
+wall). The near-identical ceiling (600,091 vs 600,084) is the tell: it's
+a property of the load generator, not the servers. Neither target
+saturated; both sized 32 GB peaked at ~21-22 GB with ~10 GB headroom.
+
+| At ~600K held | Peak memory | RAM / conn | Peak CPU |
+|---|---|---|---|
+| socketioxide | 21.4 GB | ~37 KB | 1.8% |
+| anycable-go OSS | 22.1 GB | ~39 KB | 9.0% |
+
+Two things worth stating. First, per-connection memory is comparable:
+~37 KB (socketioxide) vs ~39 KB (anycable-go), both far below Node
+Socket.io's ~52 KB. Second, and more telling: **socketioxide held 600K+
+idle connections, about 5x past Node Socket.io's ~120K ceiling.** Node
+Socket.io caps there because handshakes serialise through one event loop
+regardless of memory; socketioxide's multi-threaded tokio runtime clears
+that wall. So the Rust implementation fixes Socket.io's idle-capacity
+problem (a runtime/concurrency limit) even though it cannot fix the
+at-most-once delivery problem (a protocol limit). The two ceilings have
+different causes, and only one of them is about the language.
+
+Caveat: 600K is harness-limited, so this is a floor on each server's true
+capacity, not the ceiling. The RAM/conn figures include the memory churn
+of ~400K failed connection attempts hitting each target during ramp, so
+treat them as approximate upper bounds. To find the real server ceilings
+we would need larger bench-runner shards or more of them.
+
+Raw: `backend/results/railway-phase2/idle-*.json`.
+
+### Avalanche (deploy survival) @ 5K / 10K / 20K
+
+*Running. Results land here once the escalation completes. Each scale
+ramps N socket.io clients against `socketioxide-server`, then a real
+`railway redeploy` swaps the container mid-test; we measure recovery
+time and reconnect rate, same methodology as the Socket.io avalanche
+ladder.*
 
 ### How phase 1 was deployed
 

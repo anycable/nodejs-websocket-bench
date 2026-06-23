@@ -483,8 +483,6 @@ export const tests: TestSpec[] = [
     driftThresholdPct: 60,
   },
   // socketioxide idle: same multi-shard fan-out, targets the Rust service.
-  // No targetServiceId yet — fill in once the Railway service is created
-  // so the runner can pull memory/CPU from Railway metrics.
   {
     id: "idle-socketioxide",
     description: "Idle connections held, socketioxide (Rust), 1M target",
@@ -494,6 +492,7 @@ export const tests: TestSpec[] = [
     numShards: 50,
     perShardN: 20000,
     params: { hold: 120, ramp: 200, stream: "idle-rebaseline", serverUrl: TARGETS.socketioxide },
+    targetServiceId: "41f1ac22-2ea6-4d04-974e-4c148be426ff",
     baseline: {},
     driftThresholdPct: 60,
   },
