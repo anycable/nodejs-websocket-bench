@@ -243,6 +243,28 @@ of ~400K failed connection attempts hitting each target during ramp, so
 treat them as approximate upper bounds. To find the real server ceilings
 we would need larger bench-runner shards or more of them.
 
+**Pushing toward 1M (and why we stopped at the harness).** We traced the
+600K cap to a hard per-shard limit of ~12,002 connections to a single
+`host:port` from one source IP (ephemeral-port exhaustion, not memory:
+the bench-runner containers report `nofile=122880`). 50 shards x 12K =
+600K, exactly the cap. To go higher we grew the fleet to 85 shards
+(~1.02M of theoretical capacity) and re-ran. The expanded fleet got
+flaky: 49 of 85 shards delivered a clean 12,000 each (588,000 total, 0
+failures on those) while 36 shards errored or timed out under the
+coordinator's fan-out. So the load generator, not socketioxide, remained
+the wall, and we did not land a clean 1M. socketioxide itself never
+showed stress: it accepted every connection the surviving shards threw
+(588K, 0 failures) and stayed well under its memory limit.
+
+What this establishes: socketioxide comfortably holds **at least ~600K**
+idle socket.io connections on a 32 GB box with headroom to spare, roughly
+5x past Node Socket.io's ~120K event-loop ceiling, at per-connection
+memory comparable to AnyCable. We could not measure its true ceiling
+because reaching 1M needs a more capable load-generation fleet (more
+source IPs, or a lighter idle client than socket.io-client). That is a
+harness limitation, and the page does not claim a socketioxide idle
+ceiling on the strength of it.
+
 Raw: `backend/results/railway-phase2/idle-*.json`.
 
 ### Avalanche (deploy survival) @ 5K / 10K / 20K

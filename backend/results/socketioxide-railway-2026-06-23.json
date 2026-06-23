@@ -82,5 +82,14 @@
       "note": "client side capped ~12K; 0% recovery unambiguous"
     },
     "finding": "socketioxide tracks Node Socket.io avalanche cliff: 5K recovers, 10K ~67s/96%, 20K collapses to 0%. In-process WS dies on deploy regardless of language."
-  }
+  },
+  "idle_1M_attempt": {
+    "per_shard_cap": 12002,
+    "cap_cause": "ephemeral-port exhaustion to single host:port from one source IP (not memory; nofile=122880)",
+    "fleet_grown_to": 85,
+    "theoretical_capacity": 1020000,
+    "result": "49/85 shards clean (588000, 0 failures); 36 shards errored/timed out under coordinator fan-out",
+    "conclusion": "harness-limited, not server-limited; socketioxide held every connection thrown (588K, 0 failures) with memory headroom. True ceiling unmeasured; needs more source IPs or a lighter idle client."
+  },
+  "teardown": "all 87 services (85 shards + anycable-go + socketioxide-server) stopped; both targets downsized 32GB->0.5GB/1vCPU; verified offline"
 }
