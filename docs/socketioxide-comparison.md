@@ -13,13 +13,15 @@ numbers look like once we have them.
 
 - **Server scaffold:** `socketioxide/` in this repo. Cargo project plus
   Dockerfile that mirrors the shape of `backend/src/socketio/server.ts`:
-  `/health`, `/stats`, `/_broadcast`, `/publish-local`.
-- **Crate pinned to `socketioxide = 0.18`** (latest stable, April 2026).
+  `/health`, `/stats`, `/_broadcast`, `/publish-local`. **Compiles and
+  runs** (release build against `socketioxide 0.18.4`); validated locally
+  against the bench-runner's socket.io-client driver (see Results).
+- **Crate pinned to `socketioxide = 0.18`**, resolves to `0.18.4`.
   Features: `v4` for the Socket.io v4 wire protocol the bench-runner
-  speaks, `tracing` for structured logs. Maintainer was actively pushing
-  engineio hardening fixes on the day this branch landed; bump the pin
-  in tandem with the next tagged release if those fixes have shipped by
-  the time you deploy.
+  speaks, `tracing` for logs, `state` for the connection counter behind
+  `/stats`. Maintainer was actively pushing engineio hardening fixes on
+  the day this branch landed; bump the pin in tandem with the next tagged
+  release if those fixes have shipped by the time you deploy at scale.
 - **Bench-runner endpoints:** none new. The Rust server speaks the
   Socket.io wire protocol, so the existing `bench-jitter-socketio`,
   `bench-idle-socketio`, and `bench-avalanche-socketio` endpoints all
@@ -111,18 +113,83 @@ Tagged in the GitHub issue:
 
 ## Results
 
-*Run pending. Numbers will land here once the services are deployed and the
-manifest is rerun against them.*
+### Local head-to-head, socketioxide vs AnyCable (2026-06-23)
 
-To run the socketioxide-only subset:
+First real run. socketioxide `0.18.4` (release build) against `anycable-go`
+1.6.14, both on one machine, 200 clients, per-message HTTP publishing for
+both. AnyCable runs in the same window as a control: its expected shape
+(100% delivery, multi-second replay tail under jitter) confirms the
+environment was sound, so the socketioxide numbers aren't an artifact of a
+bad local moment. This is small-scale local, not the Railway 10K headline
+setup; treat it as "the harness works and the architectural shape holds",
+not as a published page number.
+
+**Latency (jitter disabled), 200 clients, 100 messages at 5/sec:**
+
+| | Delivery | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| socketioxide | 100% | 4 ms | 12 ms | 18 ms | 27 ms |
+| AnyCable (control) | 100% | 5 ms | 12 ms | 22 ms | 29 ms |
+
+Roundtrip latency is the same order on both. Nothing separates a Rust
+Socket.io server from AnyCable when the network is steady.
+
+**Delivery under jitter, 200 clients, TCP force-close every ~15 s:**
+
+| | Delivery | Lost | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|---|
+| socketioxide | **91.6%** | 928 | 4 ms | 12 ms | 16 ms | 26 ms |
+| AnyCable (control) | **100%** | 0 | 7 ms | 3.6 s | 5.6 s | 8.5 s |
+
+This is the architectural result the page argues for, reproduced across a
+fourth runtime. socketioxide is at-most-once: it has no replay, so the
+broadcasts that land during a client's offline window are gone (~8% lost
+here). The messages it *does* deliver are fast. AnyCable delivers 100%
+because it replays the missed range on reconnect, which is what the
+multi-second p95/p99 tail is: late-but-delivered messages. The Rust
+implementation lands in the same at-most-once band as default Socket.io
+and uWS. The delivery gap is about the protocol (replay vs none), not the
+language.
+
+Raw numbers: `backend/results/socketioxide-local-2026-06-23.json`.
+
+### Not yet run (needs Railway)
+
+Latency 10K, jitter 10K, idle 1M, and the avalanche escalation need the
+Railway services and the 50-shard bench-runner fleet. Deploy
+`socketioxide-server` from `socketioxide/` (same hardware tier as the
+other Socket.io targets), then run the socketioxide subset with AnyCable
+alongside as the control:
 
 ```bash
 cd backend
 BENCH_RUNNER_URL=https://bench-runner-production.up.railway.app \
 BENCH_RUNNER_TOKEN=<token> \
-FILTER=socketioxide \
+FILTER=socketioxide,anycable \
   npm run bench:rebaseline
 ```
 
+`FILTER=socketioxide,anycable` runs only the new Rust rows plus the
+AnyCable rows as the same-window canary, skipping the rest of the matrix.
 Multi-shard idle and avalanche entries gate behind `INCLUDE_IDLE=1` and
 `INCLUDE_AVALANCHE=1` as usual.
+
+### Reproduce the local run
+
+```bash
+# Terminal 1 — socketioxide
+cd socketioxide && cargo run --release      # :3000
+
+# Terminal 2 — anycable-go
+anycable-go --port 8080 --broker=memory --presets=broker --public
+
+# Terminal 3 — jitter, both, same window
+cd backend
+SOCKETIO_URL=http://localhost:3000 NUM_CLIENTS=200 DURATION=90 \
+  TOTAL_MESSAGES=60 INTERVAL_MS=500 JITTER_INTERVAL=15 JITTER_DURATION=1000 \
+  npm run bench:jitter:socketio
+ANYCABLE_URL=ws://localhost:8080/cable BROADCAST_URL=http://localhost:8090/_broadcast \
+  NUM_CLIENTS=200 DURATION=90 \
+  TOTAL_MESSAGES=60 INTERVAL_MS=500 JITTER_INTERVAL=15 JITTER_DURATION=1000 \
+  npm run bench:jitter:anycable
+```

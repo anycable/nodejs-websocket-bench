@@ -8,7 +8,7 @@ The repo behind [anycable.io/compare/nodejs-websocket](https://anycable.io/compa
 
 Setups under test: default Socket.io, Socket.io + Connection State Recovery, uWebSockets.js, AnyCable OSS, AnyCable Pro.
 
-Additional target on request: [socketioxide](https://github.com/totodore/socketioxide) (Rust Socket.io server). Scaffolded in `socketioxide/`; results tracked in [`docs/socketioxide-comparison.md`](./docs/socketioxide-comparison.md).
+Additional target on request: [socketioxide](https://github.com/totodore/socketioxide) (Rust Socket.io server), in `socketioxide/`. First local head-to-head vs AnyCable is in [`docs/socketioxide-comparison.md`](./docs/socketioxide-comparison.md): same at-most-once shape as default Socket.io (91.6% delivered under jitter vs AnyCable's 100%), comparable steady-state latency. Railway-scale rows pending.
 
 Methodology, traps, and the bugs we caught in our own setup: [`docs/methodology.md`](./docs/methodology.md). Below: the numbers and how to rerun them.
 

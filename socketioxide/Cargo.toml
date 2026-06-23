@@ -8,7 +8,7 @@ edition = "2021"
 # steady ~monthly cadence; bump in tandem with engineioxide when a new
 # semver-minor lands. v4 enables the Socket.io v4 wire protocol that
 # our bench-runner's socket.io-client driver speaks.
-socketioxide = { version = "0.18", features = ["v4", "tracing"] }
+socketioxide = { version = "0.18", features = ["v4", "tracing", "state"] }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"

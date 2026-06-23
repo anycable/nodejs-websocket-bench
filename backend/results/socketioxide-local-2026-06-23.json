@@ -1,0 +1,23 @@
+{
+  "run": "socketioxide vs anycable-go, local head-to-head (control canary)",
+  "date": "2026-06-23T01:23:00Z",
+  "environment": {
+    "host": "local single machine (macOS, M-series)",
+    "scale": "small (200 clients) — NOT Railway 10K headline scale",
+    "note": "AnyCable run in the same window as a control; its expected shape (100% delivery, multi-second replay tail under jitter) confirms the environment was sound for the socketioxide measurement.",
+    "socketioxide": "0.18.4 (rustc 1.95.0, release build, features v4+tracing+state)",
+    "anycable_go": "1.6.14 (--broker=memory --presets=broker)",
+    "node": "v26.0.0",
+    "publish_path": "per-message HTTP POST to /_broadcast (symmetric for both)"
+  },
+  "latency": {
+    "params": { "n": 200, "totalMessages": 100, "intervalMs": 200, "durationSec": 60, "jitter": "disabled" },
+    "socketioxide": { "deliveryRatePct": 100, "lost": 0, "p50": 4, "p95": 12, "p99": 18, "max": 27 },
+    "anycable":     { "deliveryRatePct": 100, "lost": 0, "p50": 5, "p95": 12, "p99": 22, "max": 29 }
+  },
+  "jitter": {
+    "params": { "n": 200, "totalMessages": 60, "intervalMs": 500, "durationSec": 90, "jitterIntervalSec": 15, "jitterDurationMs": 1000 },
+    "socketioxide": { "deliveryRatePct": 91.61, "lost": 928, "received": 10993, "jitterEvents": 872, "p50": 4, "p95": 12, "p99": 16, "max": 26, "protocol": "at-most-once (no replay)" },
+    "anycable":     { "deliveryRatePct": 100,   "lost": 0,   "received": 12000, "jitterEvents": 931, "p50": 7, "p95": 3621, "p99": 5623, "max": 8455, "protocol": "replay (history on reconnect)" }
+  }
+}
