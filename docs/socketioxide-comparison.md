@@ -247,11 +247,34 @@ Raw: `backend/results/railway-phase2/idle-*.json`.
 
 ### Avalanche (deploy survival) @ 5K / 10K / 20K
 
-*Running. Results land here once the escalation completes. Each scale
-ramps N socket.io clients against `socketioxide-server`, then a real
-`railway redeploy` swaps the container mid-test; we measure recovery
-time and reconnect rate, same methodology as the Socket.io avalanche
-ladder.*
+Each scale ramps N socket.io clients against `socketioxide-server`, then
+a real `railway redeploy` swaps the container mid-test (same methodology
+as the Socket.io avalanche ladder). socketioxide tracks Node Socket.io's
+cliff almost exactly:
+
+| Clients | Reconnected | Recovery | Never back |
+|---|---|---|---|
+| 5,000 | 100% | 2.9 s | 0 |
+| 10,000 | 96% | 67 s | 411 |
+| 20,000 | **0%** | never (capped at 10 min) | all |
+
+On the deploy, every connection drops (in-process WS dies with the app,
+the architectural fact). At 5K it recovers cleanly. By 10K the reconnect
+storm against the freshly-restarted single instance stretches recovery to
+over a minute with a few hundred clients never returning. By 20K it
+collapses to 0% recovered, the same cliff Node Socket.io hits around 25K
+on the page (Socket.io 10K was ~65 s / 96%, near-identical to
+socketioxide's 67 s / 96%). The Rust runtime does not change the shape:
+an in-process WS layer cannot survive its own app's deploy, and the
+reconnect storm overwhelms the new instance at scale regardless of
+language. AnyCable's avalanche row is 0 s by construction: the WS process
+is never restarted by an app deploy.
+
+(The 20K row is muddied by the client side: one bench-runner caps near
+~12K socket.io clients, so the 20K avalanche only fully ramped ~12K. The
+0% recovery is unambiguous either way.)
+
+Raw: `backend/results/railway-phase2/avalanche-socketioxide-*.json`.
 
 ### How phase 1 was deployed
 

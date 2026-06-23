@@ -63,5 +63,24 @@
       "peakCpuPct": 9.0
     },
     "finding": "socketioxide held 600K+ (5x past Node Socket.io ~120K event-loop ceiling); RAM/conn comparable to anycable. Rust runtime fixes the capacity wall, not the at-most-once delivery limit."
+  },
+  "avalanche": {
+    "5k": {
+      "reconnectPct": 100,
+      "recoveryMs": 2922,
+      "neverBack": 0
+    },
+    "10k": {
+      "reconnectPct": 96,
+      "recoveryMs": 67271,
+      "neverBack": 411
+    },
+    "20k": {
+      "reconnectPct": 0,
+      "recoveryMs": 610836,
+      "neverBack": "all",
+      "note": "client side capped ~12K; 0% recovery unambiguous"
+    },
+    "finding": "socketioxide tracks Node Socket.io avalanche cliff: 5K recovers, 10K ~67s/96%, 20K collapses to 0%. In-process WS dies on deploy regardless of language."
   }
 }
