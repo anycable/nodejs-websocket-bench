@@ -153,26 +153,87 @@ language.
 
 Raw numbers: `backend/results/socketioxide-local-2026-06-23.json`.
 
-### Not yet run (needs Railway)
+### Railway run @ 10K, socketioxide vs AnyCable OSS (2026-06-23)
 
-Latency 10K, jitter 10K, idle 1M, and the avalanche escalation need the
-Railway services and the 50-shard bench-runner fleet. Deploy
-`socketioxide-server` from `socketioxide/` (same hardware tier as the
-other Socket.io targets), then run the socketioxide subset with AnyCable
-alongside as the control:
+Phase 1 on the real infra: `socketioxide-server` deployed to the same
+Railway project as the page targets, `anycable-go` OSS woken alongside as
+the same-window canary, both driven from the Railway-hosted bench-runner
+over the internal network. AnyCable held its expected shape on every test
+(latency in band, 100% delivery under jitter, 100% throughput), so the
+window was healthy and the socketioxide numbers are not Railway noise.
+
+**Latency (jitter disabled):**
+
+| Scale | socketioxide p50 / p99 | AnyCable OSS p50 / p99 | Both delivery |
+|---|---|---|---|
+| 1K | 23 / 66 ms | 16 / 46 ms | 100% |
+| 10K | 289 / 972 ms | 232 / 731 ms | 100% |
+
+Same order of magnitude. AnyCable is a touch faster at the tail; nothing
+separates them in a way a user would feel. socketioxide delivers 100% when
+the network is steady.
+
+**Delivery under jitter (TCP force-close every ~15 s, no replay protocol):**
+
+| Scale | socketioxide delivery | AnyCable OSS (canary) |
+|---|---|---|
+| 200 (local) | 91.6% | 100% |
+| 1K (Railway) | 89.4% | 100% |
+| 10K (Railway) | **40.6%**, then **32.7%** (two runs) | 100% |
+
+This is the headline finding. socketioxide sits in the at-most-once band
+with default Socket.io (~85%) and uWS (~87%) up to 1K, then **collapses
+under the 10K reconnect storm**: two independent runs landed at 41% and
+33% delivery. The cliff is reproducible and is not a server crash (no
+errors logged, 0 connect failures, 10K/10K clients connect every time)
+and not Railway noise (AnyCable held 100% in the same windows).
+
+Two things compound at 10K. socketioxide is at-most-once, so anything that
+lands during a client's offline window is gone. And the jitter path opens
+a fresh connection per disruption (the standard Socket.io recovery, since
+the protocol has no resume), so 10K clients churning ~7 reconnects each
+is ~70K fresh handshakes against one in-process server. The Rust runtime
+does not rescue the architecture: at scale, an in-process at-most-once WS
+layer sheds most of its messages during a reconnect storm. AnyCable holds
+100% because the WS layer is a separate process the disruption never
+restarts, and replay recovers whatever the offline window missed.
+
+Caveat for fairness: AnyCable's jitter path reconnects the same cable
+in place (its client library's built-in resume), which is lighter than
+socketioxide's fresh-socket-per-event path. Part of the 10K gap is that
+asymmetry, which is itself a property of having a resume protocol versus
+not. The 1K row (89% socketioxide, same fresh-socket path) shows the
+mechanism is sound at moderate scale; the 10K row shows where it breaks.
+
+Raw numbers: `backend/results/railway-phase1/` (per-test JSON) and
+`backend/results/socketioxide-railway-2026-06-23.json` (summary).
+
+### Still pending: idle 1M + avalanche
+
+The connection-capacity (idle 1M) and avalanche-escalation rows need the
+50-shard bench-runner fleet woken and, for avalanche, real redeploys of
+`socketioxide-server` mid-test. Deferred to a phase 2. To run them later,
+wake the fleet (see [`railway-ops.md`](./railway-ops.md)) and:
 
 ```bash
 cd backend
 BENCH_RUNNER_URL=https://bench-runner-production.up.railway.app \
 BENCH_RUNNER_TOKEN=<token> \
-FILTER=socketioxide,anycable \
+FILTER=socketioxide,anycable INCLUDE_IDLE=1 INCLUDE_AVALANCHE=1 \
   npm run bench:rebaseline
 ```
 
-`FILTER=socketioxide,anycable` runs only the new Rust rows plus the
-AnyCable rows as the same-window canary, skipping the rest of the matrix.
-Multi-shard idle and avalanche entries gate behind `INCLUDE_IDLE=1` and
-`INCLUDE_AVALANCHE=1` as usual.
+### How phase 1 was deployed
+
+`socketioxide-server` is a net-new Railway service built from
+`socketioxide/`. Three things the local build didn't catch surfaced on
+Railway and are fixed in the Dockerfile / server:
+
+- Base image must be Rust 1.94+ (socketioxide 0.18.4 MSRV); `rust:1-slim`.
+- Bind `[::]` not `0.0.0.0`: Railway's private network is IPv6, so an
+  IPv4-only bind is unreachable internally.
+- Pin `PORT=3000` on the service so the listen port matches the manifest
+  target (Railway injects `PORT=8080` otherwise).
 
 ### Reproduce the local run
 

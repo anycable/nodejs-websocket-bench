@@ -8,7 +8,7 @@ The repo behind [anycable.io/compare/nodejs-websocket](https://anycable.io/compa
 
 Setups under test: default Socket.io, Socket.io + Connection State Recovery, uWebSockets.js, AnyCable OSS, AnyCable Pro.
 
-Additional target on request: [socketioxide](https://github.com/totodore/socketioxide) (Rust Socket.io server), in `socketioxide/`. First local head-to-head vs AnyCable is in [`docs/socketioxide-comparison.md`](./docs/socketioxide-comparison.md): same at-most-once shape as default Socket.io (91.6% delivered under jitter vs AnyCable's 100%), comparable steady-state latency. Railway-scale rows pending.
+Additional target on request: [socketioxide](https://github.com/totodore/socketioxide) (Rust Socket.io server), in `socketioxide/`. Head-to-head vs AnyCable in [`docs/socketioxide-comparison.md`](./docs/socketioxide-comparison.md): comparable steady-state latency, and at-most-once delivery that sits in the Socket.io band up to 1K (89% under jitter) then collapses under the 10K reconnect storm (33-41% vs AnyCable's 100%). The Rust runtime does not rescue the in-process architecture at scale. Idle 1M + avalanche rows pending a phase 2.
 
 Methodology, traps, and the bugs we caught in our own setup: [`docs/methodology.md`](./docs/methodology.md). Below: the numbers and how to rerun them.
 

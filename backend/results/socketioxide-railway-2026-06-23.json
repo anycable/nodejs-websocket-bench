@@ -1,0 +1,17 @@
+{
+  "run": "socketioxide vs anycable-go OSS, Railway phase 1 (10K)",
+  "date": "2026-06-23",
+  "infra": "Railway project gentle-commitment/production; bench-runner over internal network; anycable-go OSS as same-window canary (held expected shape on every test)",
+  "socketioxide": "0.18.4 (rust:1-slim release, [::]:3000)",
+  "anycable_go": "1.6.14 (broker=memory, presets=broker)",
+  "latency": {
+    "1k":  { "socketioxide": { "deliv": 100, "p50": 23,  "p99": 66  }, "anycable": { "deliv": 100, "p50": 16,  "p99": 46  } },
+    "10k": { "socketioxide": { "deliv": 100, "p50": 289, "p99": 972, "max": 3627 }, "anycable": { "deliv": 100, "p50": 232, "p99": 731, "max": 7798 } }
+  },
+  "jitter_delivery_pct": {
+    "200_local":   { "socketioxide": 91.6, "anycable": 100 },
+    "1k_railway":  { "socketioxide": 89.4, "anycable": 100 },
+    "10k_railway": { "socketioxide_run1": 40.6, "socketioxide_run2": 32.7, "anycable": 100 }
+  },
+  "finding": "socketioxide is at-most-once: in the band with default Socket.io / uWS up to 1K, then collapses under the 10K reconnect storm (41% then 33%, reproducible, no crash, 0 connect failures). AnyCable holds 100% (separate process + replay). Rust runtime does not rescue the in-process at-most-once architecture at scale."
+}
