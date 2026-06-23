@@ -198,7 +198,10 @@ async fn main() {
         .layer(layer)
         .with_state(http_state);
 
-    let addr = format!("0.0.0.0:{}", port);
+    // Bind IPv6 any (`[::]`), which is dual-stack on Linux and, crucially,
+    // is what Railway's private network (*.railway.internal) routes over.
+    // Binding 0.0.0.0 (IPv4-only) makes the service unreachable internally.
+    let addr = format!("[::]:{}", port);
     let listener = TcpListener::bind(&addr).await.expect("bind");
     info!(addr = %addr, "socketioxide bench server listening");
     axum::serve(listener, app).await.expect("serve");

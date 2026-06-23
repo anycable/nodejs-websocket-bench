@@ -1,21 +1,24 @@
 # Build the socketioxide bench server.
 #
-# Same shape as backend/Dockerfile: builder stage produces a static binary,
-# runtime stage is a thin slim image. Build the image from the repo root:
+# Same shape as backend/Dockerfile: builder stage produces a binary,
+# runtime stage is a thin slim image. Build the image from this directory:
 #
-#   docker build -f socketioxide/Dockerfile -t socketioxide-server .
+#   docker build -t socketioxide-server .
 #
-# Or via railway.toml deploy from this directory.
+# Or via railway.toml deploy from this directory (--path-as-root).
 
-FROM rust:1.83-slim AS builder
+# socketioxide 0.18.4 / engineioxide 0.17.5 set MSRV 1.94. Use the latest
+# stable 1.x so the image clears it (built locally on 1.95).
+FROM rust:1-slim-bookworm AS builder
 WORKDIR /src
 RUN apt-get update \
     && apt-get install -y --no-install-recommends pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-COPY Cargo.toml ./
+# Copy the lock too so the image builds the exact dependency versions we
+# resolved and tested locally (--locked fails the build if they drift).
+COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
-RUN cargo build --release \
-    && strip target/release/socketioxide-bench-server
+RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
 RUN apt-get update \
