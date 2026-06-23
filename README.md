@@ -8,7 +8,7 @@ The repo behind [anycable.io/compare/nodejs-websocket](https://anycable.io/compa
 
 Setups under test: default Socket.io, Socket.io + Connection State Recovery, uWebSockets.js, AnyCable OSS, AnyCable Pro.
 
-Additional target on request: [socketioxide](https://github.com/totodore/socketioxide) (Rust Socket.io server), in `socketioxide/`. Head-to-head vs AnyCable in [`docs/socketioxide-comparison.md`](./docs/socketioxide-comparison.md): comparable steady-state latency, and at-most-once delivery that sits in the Socket.io band up to 1K (89% under jitter) then collapses under the 10K reconnect storm (33-41% vs AnyCable's 100%). The Rust runtime does not rescue the in-process architecture at scale. Idle 1M + avalanche rows pending a phase 2.
+Sixth target, [socketioxide](https://github.com/totodore/socketioxide) (Rust Socket.io server), benchmarked head-to-head with AnyCable on the same Railway hardware. Results in [its own section below](#socketioxide-rust-socketio); deep dive in [`docs/socketioxide-comparison.md`](./docs/socketioxide-comparison.md).
 
 Methodology, traps, and the bugs we caught in our own setup: [`docs/methodology.md`](./docs/methodology.md). Below: the numbers and how to rerun them.
 
@@ -78,6 +78,37 @@ Three knobs that shape the numbers. Full reasoning in [`docs/methodology.md`](./
 - **Default Socket.io's offline window is floored to ~2 s** (`MIN_OFFLINE_MS` in `lib/core/timing.ts`). Otherwise the manual reconnect path stays offline only ~1 s and underreports the loss a real `socket.io-client` user sees with default `reconnection: true`. CSR, AnyCable, and uWS land near 2 s on their own because their client-library backoffs dominate. Same disruption shape across the board.
 - **CSR runs with the in-memory adapter.** Simplest opt-in path. Redis Streams or MongoDB shift the tail by adding network RTT; structural picture holds. CSR is documented as incompatible with the Redis pub/sub adapter, so the "Redis adapter" most teams reach for first is the one CSR can't use.
 - **AnyCable's jitter-row RAM is the tradeoff for parallel replay.** Its history buffer is per-stream so `history` parallelises across streams; that costs more RAM during jittery runs. Page-level RAM-per-connection comes from the idle test, where the per-connection footprint is what's measured.
+
+## socketioxide (Rust Socket.io)
+
+[socketioxide](https://github.com/totodore/socketioxide) speaks the Socket.io wire protocol in Rust. Its author asked us to benchmark it, so we ran it head-to-head with AnyCable on the same Railway hardware, AnyCable alongside as a same-window control. It answers a sharp question: which of Socket.io's problems are about the runtime language, and which are about the architecture?
+
+**Latency (steady network).** Comparable to AnyCable. Nothing a user feels.
+
+| | 1K p50 / p99 | 10K p50 / p99 | Delivery |
+| --- | --- | --- | --- |
+| socketioxide | 23 / 66 ms | 289 / 972 ms | 100% |
+| AnyCable OSS | 16 / 46 ms | 232 / 731 ms | 100% |
+
+**Delivery under jitter.** At-most-once, no replay. In the Socket.io band to 1K, then it falls off a cliff.
+
+| Clients | socketioxide | AnyCable |
+| --- | --- | --- |
+| 200 (local) | 91.6% | 100% |
+| 1,000 | 89.4% | 100% |
+| 10,000 | **41% then 33%** (two runs) | 100% |
+
+**Avalanche (app deploy).** Every connection dies on the deploy (in-process WS goes down with the app), and recovery collapses at scale, tracking Node Socket.io almost exactly.
+
+| Clients | Reconnected | Recovery |
+| --- | --- | --- |
+| 5,000 | 100% | 2.9 s |
+| 10,000 | 96% | 67 s |
+| 20,000 | **0%** | never |
+
+**Idle capacity.** Held **600K+** idle connections at ~37 KB each (comparable to AnyCable's ~39 KB), roughly 5x past Node Socket.io's ~120K event-loop ceiling. We could not find its true ceiling: the load-generation fleet caps near ~12K connections per shard (ephemeral ports), so the harness ran out before socketioxide did.
+
+**The takeaway.** Rust fixes Socket.io's capacity ceiling, the single-event-loop wall that caps Node around 120K. It leaves two things untouched: at-most-once delivery (no replay protocol) and deploy fragility (the WS layer still dies with its app). Both live in the protocol and the topology, so swapping the language to Rust leaves them intact, and socketioxide collapses under jitter and deploy storms at scale the same way Node Socket.io does. AnyCable holds 100% on both because the WS layer is a separate process with replay. Full numbers and the deploy story: [`docs/socketioxide-comparison.md`](./docs/socketioxide-comparison.md).
 
 ## Repository layout
 
