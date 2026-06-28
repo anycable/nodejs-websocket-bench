@@ -87,6 +87,10 @@ if (protocol === "anycable") {
   if (process.env.CABLE_URL) protocolQuery.cableUrl = process.env.CABLE_URL;
   if (process.env.BROADCAST_URL)
     protocolQuery.broadcastUrl = process.env.BROADCAST_URL;
+  // Rails targets subscribe to a real channel over the base or extended
+  // Action Cable wire protocol; the nodejs $pubsub targets leave these unset.
+  if (process.env.CHANNEL) protocolQuery.channel = process.env.CHANNEL;
+  if (process.env.AC_PROTOCOL) protocolQuery.acProtocol = process.env.AC_PROTOCOL;
 }
 if (protocol === "socketio" || protocol === "socketio-csr") {
   if (process.env.SERVER_URL) protocolQuery.serverUrl = process.env.SERVER_URL;

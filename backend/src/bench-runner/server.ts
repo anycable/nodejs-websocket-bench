@@ -29,6 +29,7 @@ import { runJitterAnycableTraced } from "../lib/jitter-anycable-traced.js";
 import { runAnycableTrace } from "../lib/anycable-trace.js";
 import { runIdleAnycable, runIdleSocketio, runIdleUws } from "../lib/idle-runner.js";
 import { runAvalancheSocketio } from "../lib/avalanche-runner.js";
+import { runAvalancheAnycable } from "../lib/avalanche-anycable-runner.js";
 import { runDeployImpactSocketio } from "../lib/deploy-impact-runner.js";
 import { runStandaloneDeployImpactSocketio } from "../lib/standalone-deploy-impact-runner.js";
 import { runStandaloneDeployImpactAnycable } from "../lib/standalone-deploy-impact-anycable-runner.js";
@@ -170,11 +171,18 @@ app.post("/bench-jitter-anycable", async (req, res) => {
   const params = paramsFromQuery(req);
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
   const broadcastUrl = (req.query.broadcastUrl as string) || ANYCABLE_BROADCAST_URL;
+  // `?channel=BenchmarkChannel&acProtocol=actioncable-v1-json` targets a real
+  // Rails app (Action Cable / Solid Cable); the defaults target anycable-go's
+  // $pubsub channel over the extended protocol.
+  const channel = (req.query.channel as string) || undefined;
+  const acProtocol = (req.query.acProtocol as string) || undefined;
   await respondAsync(req, res, () =>
     runJitterAnycable(params, {
       cableUrl,
       broadcastUrl,
       broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+      channel,
+      acProtocol,
     }),
   );
 });
@@ -285,9 +293,11 @@ app.post("/bench-idle-anycable", async (req, res) => {
   const stream = (req.query.stream as string) || "idle-probe";
   const shardLabel = (req.query.shard as string) || undefined;
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+  const channel = (req.query.channel as string) || undefined;
+  const acProtocol = (req.query.acProtocol as string) || undefined;
 
   await respondAsync(req, res, () =>
-    runIdleAnycable({ n, holdSec, rampPerSec, stream }, cableUrl, shardLabel),
+    runIdleAnycable({ n, holdSec, rampPerSec, stream, channel, acProtocol }, cableUrl, shardLabel),
   );
 });
 
@@ -347,6 +357,29 @@ app.post("/bench-avalanche-socketio", async (req, res) => {
     runAvalancheSocketio(
       { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
       serverUrl,
+    ),
+  );
+});
+
+// Action Cable avalanche — connect N cables (AnyCable / Action Cable / Solid
+// Cable), wait for an externally-triggered redeploy, measure recovery. For the
+// in-process adapters (redeploy Puma) connections drop and reconnect; for
+// AnyCable (redeploy the Rails RPC backend) the gateway holds them and
+// `disconnected` stays ~0. `?channel=` + `?acProtocol=` select the target.
+app.post("/bench-avalanche-anycable", async (req, res) => {
+  const n = parseInt((req.query.n as string) || "1000", 10);
+  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
+  const prearmSec = parseInt((req.query.prearm as string) || "120", 10);
+  const recoveryWaitSec = parseInt((req.query.recoveryWait as string) || "240", 10);
+  const stream = (req.query.stream as string) || "avalanche-ac";
+  const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
+  const channel = (req.query.channel as string) || undefined;
+  const acProtocol = (req.query.acProtocol as string) || undefined;
+
+  await respondAsync(req, res, () =>
+    runAvalancheAnycable(
+      { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+      { cableUrl, channel, acProtocol },
     ),
   );
 });

@@ -1,0 +1,15 @@
+# AsyncCable target. The WebSockets are served in-process by Falcon via
+# Async::Cable::Middleware; this adapter is only the pub/sub fan-out path
+# between Falcon worker processes. We use Redis to match the Action Cable
+# Redis-adapter target exactly, so the only variable under test is the WS
+# engine (Falcon fibers vs Puma threads).
+development:
+  adapter: async
+
+test:
+  adapter: test
+
+production:
+  adapter: redis
+  url: <%= ENV.fetch("REDIS_URL", "redis://localhost:6379/1") %>
+  channel_prefix: cable_bench_falcon

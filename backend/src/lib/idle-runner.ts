@@ -108,6 +108,12 @@ export interface IdleParams {
   holdSec: number;
   rampPerSec: number;
   stream: string;
+  // AnyCable/Action Cable only. Channel to subscribe to (default "$pubsub" for
+  // the standalone anycable-go targets; "BenchmarkChannel" for a real Rails
+  // app) and the WebSocket subprotocol (extended "actioncable-v1-ext-json" for
+  // AnyCable, base "actioncable-v1-json" for vanilla Action Cable / Solid Cable).
+  channel?: string;
+  acProtocol?: string;
 }
 
 export interface IdleResult {
@@ -135,8 +141,10 @@ export async function runIdleAnycable(
   const sockets: WebSocket[] = [];
   const startedAt = Date.now();
 
+  const acProtocol = p.acProtocol ?? "actioncable-v1-ext-json";
+  const channel = p.channel ?? "$pubsub";
   for (let i = 0; i < p.n; i++) {
-    const ws = new WebSocket(cableUrl, ["actioncable-v1-ext-json"]);
+    const ws = new WebSocket(cableUrl, [acProtocol]);
     sockets.push(ws);
 
     // `failed` should count connection ATTEMPTS that never opened —
@@ -156,13 +164,14 @@ export async function runIdleAnycable(
         const msg = JSON.parse(raw.toString());
         if (msg.type === "welcome") {
           result.welcomed++;
-          // Subscribe to a $pubsub stream — works without RPC since
-          // anycable-go is started with ANYCABLE_PUBLIC=true.
+          // Subscribe. For "$pubsub" this works without RPC (anycable-go runs
+          // with ANYCABLE_PUBLIC=true); for a real Rails channel the gateway /
+          // Puma routes the subscribe command to the app.
           ws.send(
             JSON.stringify({
               command: "subscribe",
               identifier: JSON.stringify({
-                channel: "$pubsub",
+                channel,
                 stream_name: p.stream,
               }),
             })

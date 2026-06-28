@@ -1,0 +1,29 @@
+# Three benchmark adapters selected at boot by CABLE_ADAPTER:
+#   solid_cable (default) — Rails 8 out-of-the-box, DB-polling, in-process Puma
+#   redis                  — classic Action Cable pub/sub, in-process Puma
+#   any_cable              — out-of-process anycable-go gateway, Rails over gRPC
+#
+# polling_interval / message_retention can be tuned via env for the Solid Cable
+# runs without touching code.
+<% adapter = ENV.fetch("CABLE_ADAPTER", "solid_cable") %>
+development:
+  adapter: async
+
+test:
+  adapter: test
+
+production:
+<% if adapter == "redis" %>
+  adapter: redis
+  url: <%= ENV.fetch("REDIS_URL", "redis://localhost:6379/1") %>
+  channel_prefix: cable_bench
+<% elsif adapter == "any_cable" %>
+  adapter: any_cable
+<% else %>
+  adapter: solid_cable
+  connects_to:
+    database:
+      writing: cable
+  polling_interval: <%= ENV.fetch("SOLID_CABLE_POLLING_INTERVAL", "0.1") %>.seconds
+  message_retention: <%= ENV.fetch("SOLID_CABLE_RETENTION", "1.day") %>
+<% end %>

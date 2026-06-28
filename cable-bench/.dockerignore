@@ -1,0 +1,15 @@
+.git
+.gitignore
+# No encrypted credentials are used (SECRET_KEY_BASE_DUMMY=1 supplies the key).
+# Copying master.key as a root-owned 0600 file breaks boot under USER rails.
+/config/master.key
+/log/*
+/tmp/*
+/storage/*
+!/storage/.keep
+/node_modules
+/.bundle
+/vendor/bundle
+*.sqlite3
+*.sqlite3-*
+.DS_Store

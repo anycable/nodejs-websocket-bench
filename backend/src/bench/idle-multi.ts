@@ -22,6 +22,7 @@ import { writeFileSync } from "fs";
 import { Agent, setGlobalDispatcher } from "undici";
 
 import type { IdleResult } from "../lib/idle-runner.js";
+import { benchRunnerFetch } from "../lib/core/bench-runner-client.js";
 import { fetchMetric, readRailwayToken } from "../lib/core/railway-api.js";
 import { chart } from "../lib/core/chart.js";
 import { resultPath } from "../lib/core/results-dir.js";
@@ -53,6 +54,11 @@ const stream = process.env.STREAM || "idle-probe";
 // Optional override sent to each shard so the bench-runner targets a
 // different anycable-go service (e.g. anycable-go-pro for the Pro variant).
 const cableUrl = process.env.CABLE_URL;
+// For a real Rails channel: CHANNEL=BenchmarkChannel and the base protocol
+// AC_PROTOCOL=actioncable-v1-json (vanilla Action Cable / Solid Cable /
+// AsyncCable). Omitted for standalone anycable-go ($pubsub over ext-json).
+const channel = process.env.CHANNEL;
+const acProtocol = process.env.AC_PROTOCOL;
 
 // TARGET=socketio switches the test to /bench-idle-socketio (Node-based
 // Socket.io). TARGET=uws targets /bench-idle-uws (uWebSockets.js).
@@ -89,6 +95,8 @@ async function runShard(url: string, label: string): Promise<IdleResult> {
     shard: label,
   });
   if (target === "anycable" && cableUrl) qs.set("cableUrl", cableUrl);
+  if (target === "anycable" && channel) qs.set("channel", channel);
+  if (target === "anycable" && acProtocol) qs.set("acProtocol", acProtocol);
   if (target === "socketio" && socketioServerUrl) qs.set("serverUrl", socketioServerUrl);
   if (target === "uws" && uwsWsUrl) qs.set("wsUrl", uwsWsUrl);
   const endpoint =
@@ -101,7 +109,7 @@ async function runShard(url: string, label: string): Promise<IdleResult> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), SHARD_TIMEOUT_MS);
   try {
-    const res = await fetch(`${url}/${endpoint}?${qs.toString()}`, {
+    const res = await benchRunnerFetch(`${url}/${endpoint}?${qs.toString()}`, {
       method: "POST",
       signal: ctrl.signal,
     });

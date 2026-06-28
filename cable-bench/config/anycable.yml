@@ -1,0 +1,17 @@
+# AnyCable (RPC) configuration for the AnyCable benchmark mode only. The other
+# two modes (solid_cable, redis) never load this — Rails serves /cable itself.
+#
+# Here Rails runs the gRPC RPC server (`bundle exec anycable`) and anycable-go
+# is the separate WebSocket gateway. Broadcasts go over Redis Streams (redisx)
+# so the gateway's broker can keep stream history and resume the extended
+# Action Cable protocol on reconnect (the delivery-guarantee path). Wire the
+# Redis URL and RPC bind via env in deployment (ANYCABLE_REDIS_URL,
+# ANYCABLE_RPC_HOST).
+default: &default
+  broadcast_adapter: redisx
+
+development:
+  <<: *default
+
+production:
+  <<: *default

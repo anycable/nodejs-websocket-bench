@@ -101,7 +101,34 @@ const TARGETS = {
   // See docs/socketioxide-comparison.md for the open question to the
   // library author.
   socketioxide: "http://socketioxide-server.railway.internal:3000",
+
+  // Rails broadcasting comparison (AnyCable vs Action Cable vs Solid Cable).
+  // One Rails app (cable-bench/), three deployments selected by BENCH_MODE.
+  // Action Cable / Solid Cable terminate WebSockets in Puma and expose the
+  // app's POST /_bench/broadcast publish endpoint; the bench-runner reuses the
+  // anycable jitter/idle/avalanche endpoints with ?channel=BenchmarkChannel and
+  // ?acProtocol=actioncable-v1-json. AnyCable terminates in a separate
+  // anycable-go gateway (RPC -> the Rails app) and publishes via the gateway's
+  // /_broadcast, exactly like the standalone AnyCable target, but over the
+  // extended protocol and a real BenchmarkChannel.
+  railsSolidCable: "ws://rails-solidcable.railway.internal:3000/cable",
+  railsSolidCableBroadcast: "http://rails-solidcable.railway.internal:3000/_bench/broadcast",
+  railsActionCable: "ws://rails-actioncable.railway.internal:3000/cable",
+  railsActionCableBroadcast: "http://rails-actioncable.railway.internal:3000/_bench/broadcast",
+  railsAnyCable: "ws://anycable-go-rails.railway.internal:8080/cable",
+  railsAnyCableBroadcast: "http://anycable-go-rails.railway.internal:8080/_broadcast",
+  // AsyncCable: standard Action Cable wire protocol, served in-process by
+  // Falcon (async/fibers) instead of Puma. Same /cable + /_bench/broadcast
+  // surface as the other in-process Rails targets.
+  railsAsyncCable: "ws://rails-asynccable.railway.internal:3000/cable",
+  railsAsyncCableBroadcast: "http://rails-asynccable.railway.internal:3000/_bench/broadcast",
 };
+
+// Action Cable subscribe presets. BenchmarkChannel is the channel the Rails
+// app exposes (cable-bench/app/channels/benchmark_channel.rb). Vanilla Action
+// Cable / Solid Cable speak the base protocol; AnyCable the extended one.
+const RAILS_BASE = { channel: "BenchmarkChannel", acProtocol: "actioncable-v1-json" };
+const RAILS_EXT = { channel: "BenchmarkChannel", acProtocol: "actioncable-v1-ext-json" };
 
 // Common knobs reused across tests. Keep these explicit so the manifest
 // is self-documenting; copy-paste is fine when a test deviates.
@@ -626,6 +653,210 @@ export const tests: TestSpec[] = [
     mode: "avalanche",
     redeployServiceName: "socketioxide-server",
     params: { n: 20000, ramp: 200, prearm: 240, recoveryWait: 600, stream: "avalanche-sox-20k", serverUrl: TARGETS.socketioxide },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+
+  // ===========================================================================
+  // Rails broadcasting: AnyCable vs Action Cable vs Solid Cable
+  //
+  // One Rails app, three cable backends. All speak Action Cable at the app
+  // level (same BenchmarkChannel), but: Solid Cable and Action Cable terminate
+  // WebSockets in Puma (in-process Ruby; Solid Cable also polls the DB), while
+  // AnyCable offloads them to anycable-go (Rails is only the gRPC backend) and
+  // speaks the extended protocol with delivery guarantees. Baselines are empty
+  // until the first same-window Railway sweep. Reuses the anycable bench-runner
+  // endpoints via ?channel + ?acProtocol; no new endpoints for latency/jitter.
+  // ===========================================================================
+
+  // Latency (jitter-disabled roundtrip)
+  {
+    id: "latency-rails-solidcable-1k",
+    description: "Roundtrip latency, Rails + Solid Cable, 1K subs",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "sync",
+    params: { n: 1000, ...LATENCY_1K, ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable, broadcastUrl: TARGETS.railsSolidCableBroadcast },
+    baseline: {},
+  },
+  {
+    id: "latency-rails-solidcable-5k",
+    description: "Roundtrip latency, Rails + Solid Cable, 5K subs",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "sync",
+    params: { n: 5000, ...LATENCY_10K, ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable, broadcastUrl: TARGETS.railsSolidCableBroadcast },
+    baseline: {},
+  },
+  {
+    id: "latency-rails-actioncable-1k",
+    description: "Roundtrip latency, Rails + Action Cable (Redis), 1K subs",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "sync",
+    params: { n: 1000, ...LATENCY_1K, ...RAILS_BASE, cableUrl: TARGETS.railsActionCable, broadcastUrl: TARGETS.railsActionCableBroadcast },
+    baseline: {},
+  },
+  {
+    id: "latency-rails-actioncable-5k",
+    description: "Roundtrip latency, Rails + Action Cable (Redis), 5K subs",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "sync",
+    params: { n: 5000, ...LATENCY_10K, ...RAILS_BASE, cableUrl: TARGETS.railsActionCable, broadcastUrl: TARGETS.railsActionCableBroadcast },
+    baseline: {},
+  },
+  {
+    id: "latency-rails-anycable-1k",
+    description: "Roundtrip latency, Rails + AnyCable (Go gateway), 1K subs",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "sync",
+    params: { n: 1000, ...LATENCY_1K, ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable, broadcastUrl: TARGETS.railsAnyCableBroadcast },
+    baseline: {},
+  },
+  {
+    id: "latency-rails-anycable-5k",
+    description: "Roundtrip latency, Rails + AnyCable (Go gateway), 5K subs",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "sync",
+    params: { n: 5000, ...LATENCY_10K, ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable, broadcastUrl: TARGETS.railsAnyCableBroadcast },
+    baseline: {},
+  },
+
+  // Reliability under WiFi jitter. The headline: AnyCable's extended protocol
+  // resumes the stream and backfills missed messages (delivery ~100%); vanilla
+  // Action Cable and Solid Cable have no resume, so each offline window drops
+  // broadcasts for good.
+  {
+    id: "jitter-rails-solidcable-5k",
+    description: "Reliability under WiFi jitter, Rails + Solid Cable, 5K",
+    category: "jitter",
+    endpoint: "bench-jitter-anycable",
+    mode: "async",
+    params: { n: 5000, ...JITTER_10K, ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable, broadcastUrl: TARGETS.railsSolidCableBroadcast, samplesCap: 5000 },
+    baseline: {},
+    driftThresholdPct: 15,
+  },
+  {
+    id: "jitter-rails-actioncable-5k",
+    description: "Reliability under WiFi jitter, Rails + Action Cable (Redis), 5K",
+    category: "jitter",
+    endpoint: "bench-jitter-anycable",
+    mode: "async",
+    params: { n: 5000, ...JITTER_10K, ...RAILS_BASE, cableUrl: TARGETS.railsActionCable, broadcastUrl: TARGETS.railsActionCableBroadcast, samplesCap: 5000 },
+    baseline: {},
+    driftThresholdPct: 15,
+  },
+  {
+    id: "jitter-rails-anycable-5k",
+    description: "Reliability under WiFi jitter, Rails + AnyCable, 5K",
+    category: "jitter",
+    endpoint: "bench-jitter-anycable",
+    mode: "async",
+    params: { n: 5000, ...JITTER_10K, ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable, broadcastUrl: TARGETS.railsAnyCableBroadcast, samplesCap: 5000 },
+    baseline: {},
+    driftThresholdPct: 15,
+  },
+
+  // Idle capacity. In-process Puma (Solid/Action Cable) tops out far below the
+  // Go gateway; targets are sized to find each ceiling (in-process ~200K probe,
+  // AnyCable 1M). Fill targetServiceId after deploy to attach Railway memory/CPU.
+  {
+    id: "idle-rails-solidcable",
+    description: "Idle connections held, Rails + Solid Cable",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 4000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+  {
+    id: "idle-rails-actioncable",
+    description: "Idle connections held, Rails + Action Cable (Redis)",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 4000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_BASE, cableUrl: TARGETS.railsActionCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+  {
+    id: "idle-rails-anycable",
+    description: "Idle connections held, Rails + AnyCable (Go gateway)",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 12000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+  {
+    id: "idle-rails-asynccable",
+    description: "Idle connections held, Rails + AsyncCable (Falcon)",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 4000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_BASE, cableUrl: TARGETS.railsAsyncCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+
+  // Deploy survival. Redeploy the Rails service mid-test. Action Cable / Solid
+  // Cable run WebSockets in Puma, so a deploy drops every connection; AnyCable
+  // runs them in anycable-go, so redeploying the Rails RPC backend leaves the
+  // fleet connected (expected disconnected ~0).
+  {
+    id: "avalanche-rails-solidcable-5k",
+    description: "Avalanche: 5K Rails + Solid Cable clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-solidcable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-sc", ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-rails-actioncable-5k",
+    description: "Avalanche: 5K Rails + Action Cable clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-actioncable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-ac", ...RAILS_BASE, cableUrl: TARGETS.railsActionCable },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-rails-anycable-5k",
+    description: "Avalanche: 5K Rails + AnyCable clients, RPC backend redeploy (should survive)",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-anycable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-any", ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-rails-asynccable-5k",
+    description: "Avalanche: 5K Rails + AsyncCable (Falcon) clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-asynccable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-asc", ...RAILS_BASE, cableUrl: TARGETS.railsAsyncCable },
     baseline: {},
     driftThresholdPct: 100,
   },

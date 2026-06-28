@@ -117,6 +117,16 @@ export interface AnycableUrls {
   cableUrl: string;
   broadcastUrl: string;
   broadcastSecret?: string;
+  // Channel to subscribe to. Defaults to "$pubsub" (anycable-go's public
+  // pub/sub channel, used by the standalone OSS/Pro targets via streamFrom).
+  // For a real Rails app, pass "BenchmarkChannel" and the driver subscribes
+  // to that named channel with { stream_name } params instead.
+  channel?: string;
+  // WebSocket subprotocol. AnyCable uses the extended Action Cable protocol
+  // ("actioncable-v1-ext-json") which carries the delivery-guarantee /
+  // resume machinery; vanilla Action Cable and Solid Cable speak the base
+  // protocol ("actioncable-v1-json").
+  acProtocol?: string;
 }
 
 export async function runJitterAnycable(
@@ -137,7 +147,7 @@ export async function runJitterAnycable(
 
     const cable = createCable(urls.cableUrl, {
       websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
-      protocol: "actioncable-v1-ext-json",
+      protocol: (urls.acProtocol ?? "actioncable-v1-ext-json") as never,
       // The @anycable/core types don't include "error" yet; the runtime
       // accepts any of error|warn|info|debug.
       logLevel: "error" as never,
@@ -147,7 +157,12 @@ export async function runJitterAnycable(
     cable.on("connect", () => {
       stat.everConnected = true;
     });
-    const channel = cable.streamFrom(p.stream);
+    // "$pubsub" -> anycable-go's signed pub/sub channel (streamFrom). Any
+    // other value -> a real Rails channel subscribed with { stream_name }.
+    const channel =
+      urls.channel && urls.channel !== "$pubsub"
+        ? cable.subscribeTo(urls.channel, { stream_name: p.stream })
+        : cable.streamFrom(p.stream);
     channel.on("message", (msg: unknown) => recordMsg(stat, msg));
     cables.push(cable);
 
