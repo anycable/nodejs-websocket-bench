@@ -93,6 +93,14 @@ const TARGETS = {
   anycablePro: "ws://anycable-go-pro.railway.internal:8080/cable",
   anycableProBroadcast:
     "http://anycable-go-pro.railway.internal:8080/_broadcast",
+  // socketioxide is the Rust implementation of the Socket.io protocol.
+  // Wire-compatible with socket.io-client, so the existing bench-runner
+  // bench-jitter-socketio / bench-idle-socketio / bench-avalanche-socketio
+  // endpoints work with ?serverUrl=. No CSR variant yet — the library
+  // doesn't appear to ship Connection State Recovery as of 0.18.3.
+  // See docs/socketioxide-comparison.md for the open question to the
+  // library author.
+  socketioxide: "http://socketioxide-server.railway.internal:3000",
 };
 
 // Common knobs reused across tests. Keep these explicit so the manifest
@@ -202,6 +210,27 @@ export const tests: TestSpec[] = [
     params: { n: 10000, ...LATENCY_10K, cableUrl: TARGETS.anycablePro, broadcastUrl: TARGETS.anycableProBroadcast },
     baseline: { "latencyRawMs.p50": 234, "latencyRawMs.p99": 694, deliveryRatePct: 100 },
   },
+  // socketioxide: same Socket.io wire protocol, Rust implementation. Uses
+  // the bench-jitter-socketio endpoint with ?serverUrl=<socketioxide>. No
+  // baselines yet — first run pending. See docs/socketioxide-comparison.md.
+  {
+    id: "latency-socketioxide-1k",
+    description: "Roundtrip latency, socketioxide (Rust), 1K subs",
+    category: "latency",
+    endpoint: "bench-jitter-socketio",
+    mode: "sync",
+    params: { n: 1000, ...LATENCY_1K, serverUrl: TARGETS.socketioxide },
+    baseline: {},
+  },
+  {
+    id: "latency-socketioxide-10k",
+    description: "Roundtrip latency, socketioxide (Rust), 10K subs",
+    category: "latency",
+    endpoint: "bench-jitter-socketio",
+    mode: "sync",
+    params: { n: 10000, ...LATENCY_10K, serverUrl: TARGETS.socketioxide },
+    baseline: {},
+  },
 
   // -------------------------------------------------------------------------
   // Reliability (jitter under WiFi-drop pattern)
@@ -264,6 +293,18 @@ export const tests: TestSpec[] = [
     mode: "async",
     params: { n: 10000, ...JITTER_10K, cableUrl: TARGETS.anycablePro, broadcastUrl: TARGETS.anycableProBroadcast, samplesCap: 5000 },
     baseline: { deliveryRatePct: 100, lostDeliveries: 0, "latencyRawMs.p95": 4100, "latencyRawMs.p99": 6200 },
+  },
+  // socketioxide jitter row. Expected to land in the at-most-once band
+  // with default Socket.io and uWS, since socketioxide doesn't appear to
+  // ship CSR. Confirms the architectural claim across runtimes.
+  {
+    id: "jitter-socketioxide-10k",
+    description: "Reliability under WiFi jitter, socketioxide (Rust), 10K",
+    category: "jitter",
+    endpoint: "bench-jitter-socketio",
+    mode: "async",
+    params: { n: 10000, ...JITTER_10K, serverUrl: TARGETS.socketioxide, samplesCap: 5000 },
+    baseline: {},
   },
 
   // -------------------------------------------------------------------------
@@ -441,6 +482,20 @@ export const tests: TestSpec[] = [
     baseline: { connected: 1000000, ramKbPerConnected: 5 },
     driftThresholdPct: 60,
   },
+  // socketioxide idle: same multi-shard fan-out, targets the Rust service.
+  {
+    id: "idle-socketioxide",
+    description: "Idle connections held, socketioxide (Rust), 1M target",
+    category: "idle",
+    endpoint: "bench-idle-socketio",
+    mode: "multi-shard",
+    numShards: 50,
+    perShardN: 20000,
+    params: { hold: 120, ramp: 200, stream: "idle-rebaseline", serverUrl: TARGETS.socketioxide },
+    targetServiceId: "41f1ac22-2ea6-4d04-974e-4c148be426ff",
+    baseline: {},
+    driftThresholdPct: 60,
+  },
 
   // -------------------------------------------------------------------------
   // Avalanche (in-process WS layer restart under N held connections).
@@ -534,6 +589,44 @@ export const tests: TestSpec[] = [
     // wide threshold so even partial recovery would surface but won't
     // trigger a regression flag.
     baseline: { reconnectRatePct: 0 },
+    driftThresholdPct: 100,
+  },
+  // socketioxide avalanche escalation: mirror the Socket.io ladder (5K, 10K,
+  // 15K, 20K, 25K). Same redeploy mechanism, just pointed at the Rust service.
+  // The interesting question is whether Rust's event loop pushes the cliff out
+  // further than Node's, or whether the architectural problem (in-process WS
+  // dies with the app) holds the shape across languages.
+  {
+    id: "avalanche-socketioxide-5k",
+    description: "Avalanche: 5K socketioxide clients, server redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketioxide-server",
+    params: { n: 5000, ramp: 200, prearm: 90, recoveryWait: 180, stream: "avalanche-sox-5k", serverUrl: TARGETS.socketioxide },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-socketioxide-10k",
+    description: "Avalanche: 10K socketioxide clients, server redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketioxide-server",
+    params: { n: 10000, ramp: 200, prearm: 120, recoveryWait: 240, stream: "avalanche-sox-10k", serverUrl: TARGETS.socketioxide },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-socketioxide-20k",
+    description: "Avalanche: 20K socketioxide clients, server redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-socketio",
+    mode: "avalanche",
+    redeployServiceName: "socketioxide-server",
+    params: { n: 20000, ramp: 200, prearm: 240, recoveryWait: 600, stream: "avalanche-sox-20k", serverUrl: TARGETS.socketioxide },
+    baseline: {},
     driftThresholdPct: 100,
   },
 ];

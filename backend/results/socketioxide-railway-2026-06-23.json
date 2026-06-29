@@ -1,0 +1,95 @@
+{
+  "run": "socketioxide vs anycable-go OSS, Railway phase 1 (10K)",
+  "date": "2026-06-23",
+  "infra": "Railway project gentle-commitment/production; bench-runner over internal network; anycable-go OSS as same-window canary (held expected shape on every test)",
+  "socketioxide": "0.18.4 (rust:1-slim release, [::]:3000)",
+  "anycable_go": "1.6.14 (broker=memory, presets=broker)",
+  "latency": {
+    "1k": {
+      "socketioxide": {
+        "deliv": 100,
+        "p50": 23,
+        "p99": 66
+      },
+      "anycable": {
+        "deliv": 100,
+        "p50": 16,
+        "p99": 46
+      }
+    },
+    "10k": {
+      "socketioxide": {
+        "deliv": 100,
+        "p50": 289,
+        "p99": 972,
+        "max": 3627
+      },
+      "anycable": {
+        "deliv": 100,
+        "p50": 232,
+        "p99": 731,
+        "max": 7798
+      }
+    }
+  },
+  "jitter_delivery_pct": {
+    "200_local": {
+      "socketioxide": 91.6,
+      "anycable": 100
+    },
+    "1k_railway": {
+      "socketioxide": 89.4,
+      "anycable": 100
+    },
+    "10k_railway": {
+      "socketioxide_run1": 40.6,
+      "socketioxide_run2": 32.7,
+      "anycable": 100
+    }
+  },
+  "finding": "socketioxide is at-most-once: in the band with default Socket.io / uWS up to 1K, then collapses under the 10K reconnect storm (41% then 33%, reproducible, no crash, 0 connect failures). AnyCable holds 100% (separate process + replay). Rust runtime does not rescue the in-process at-most-once architecture at scale.",
+  "idle_600k": {
+    "note": "harness-limited at ~600K (shards capped ~12K each); neither target saturated",
+    "socketioxide": {
+      "connected": 600091,
+      "peakMemGB": 21.4,
+      "ramKbPerConn": 37,
+      "peakCpuPct": 1.8
+    },
+    "anycable_go": {
+      "connected": 600084,
+      "peakMemGB": 22.1,
+      "ramKbPerConn": 39,
+      "peakCpuPct": 9.0
+    },
+    "finding": "socketioxide held 600K+ (5x past Node Socket.io ~120K event-loop ceiling); RAM/conn comparable to anycable. Rust runtime fixes the capacity wall, not the at-most-once delivery limit."
+  },
+  "avalanche": {
+    "5k": {
+      "reconnectPct": 100,
+      "recoveryMs": 2922,
+      "neverBack": 0
+    },
+    "10k": {
+      "reconnectPct": 96,
+      "recoveryMs": 67271,
+      "neverBack": 411
+    },
+    "20k": {
+      "reconnectPct": 0,
+      "recoveryMs": 610836,
+      "neverBack": "all",
+      "note": "client side capped ~12K; 0% recovery unambiguous"
+    },
+    "finding": "socketioxide tracks Node Socket.io avalanche cliff: 5K recovers, 10K ~67s/96%, 20K collapses to 0%. In-process WS dies on deploy regardless of language."
+  },
+  "idle_1M_attempt": {
+    "per_shard_cap": 12002,
+    "cap_cause": "ephemeral-port exhaustion to single host:port from one source IP (not memory; nofile=122880)",
+    "fleet_grown_to": 85,
+    "theoretical_capacity": 1020000,
+    "result": "49/85 shards clean (588000, 0 failures); 36 shards errored/timed out under coordinator fan-out",
+    "conclusion": "harness-limited, not server-limited; socketioxide held every connection thrown (588K, 0 failures) with memory headroom. True ceiling unmeasured; needs more source IPs or a lighter idle client."
+  },
+  "teardown": "all 87 services (85 shards + anycable-go + socketioxide-server) stopped; both targets downsized 32GB->0.5GB/1vCPU; verified offline"
+}
