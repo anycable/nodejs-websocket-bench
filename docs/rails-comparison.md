@@ -1,4 +1,4 @@
-# Rails in the comparison: Action Cable vs Solid Cable vs AsyncCable vs AnyCable
+# Rails in the comparison: Action Cable vs Solid Cable vs Async::Cable vs AnyCable
 
 The repo behind [anycable.io/compare/rails-actioncable](https://anycable.io/compare/rails-actioncable).
 Four WebSocket adapters for the same Rails app, same Railway box, same
@@ -9,7 +9,7 @@ shared-tenant window:
 - **Solid Cable** (Rails 8 default-stack adapter). Same in-process
   termination, no Redis; the adapter polls a database table (default
   every 100 ms) for new messages.
-- **AsyncCable** ([socketry/async-cable](https://github.com/socketry/async-cable)):
+- **Async::Cable** ([socketry/async-cable](https://github.com/socketry/async-cable)):
   serves Action Cable in-process on [Falcon](https://github.com/socketry/falcon),
   a fiber-based reactor, instead of Puma's threads. Same wire protocol; a
   different concurrency engine. Built on `actioncable-next`, so it runs on
@@ -26,7 +26,7 @@ difference is the adapter, not the app.
 
 ## The one thing that differs on the wire
 
-Action Cable, Solid Cable and AsyncCable speak the base
+Action Cable, Solid Cable and Async::Cable speak the base
 `actioncable-v1-json` protocol, which is **at-most-once**: a broadcast that
 goes out while a client is briefly offline is gone, because there is no
 history to replay on reconnect. AnyCable speaks the extended
@@ -36,7 +36,7 @@ it saw. The AnyCable JS client negotiates the extended protocol
 automatically; a plain Action Cable client still connects over the base
 protocol. That single difference drives the reliability gap below.
 
-Note AsyncCable: switching Puma threads for Falcon fibers changes the
+Note Async::Cable: switching Puma threads for Falcon fibers changes the
 runtime, not the guarantees. It is still in-process (drops on deploy) and
 still speaks the base protocol (loses messages under jitter, same as the
 others). Falcon does not close the reliability or deploy gap, because those
@@ -55,12 +55,12 @@ four Rails targets, parameterized by:
 - `channel`: `BenchmarkChannel` (real Rails channel), vs `$pubsub` for
   the bare-stream nodejs targets.
 - `acProtocol`: `actioncable-v1-json` for Action Cable / Solid Cable /
-  AsyncCable, `actioncable-v1-ext-json` for AnyCable.
+  Async::Cable, `actioncable-v1-ext-json` for AnyCable.
 
 The Puma/Redis and Solid Cable targets live in `cable-bench/` (named
 `cable-bench` because `rails` is a reserved Railway app name): one Docker
 image, two modes via `BENCH_MODE`. AnyCable runs the same app as its gRPC
-RPC backend with `anycable-go-rails` as the gateway. AsyncCable runs from
+RPC backend with `anycable-go-rails` as the gateway. Async::Cable runs from
 `cable-bench-falcon/`, a copy of the app booted on Falcon
 (`bundle exec falcon serve`) with `actioncable-next` + `async-cable`.
 Manifest entries are in `backend/src/bench/tests-manifest.ts` under each
@@ -83,20 +83,20 @@ latency (and jitter) test."
 All numbers from sharded runs in one shared-tenant Railway window
 (2026-06-28), captured in
 `backend/results/rails-sharded-2026-06-28.json`. The in-process targets ran
-Puma with 8 workers × 5 threads; AsyncCable ran Falcon with 8 processes.
+Puma with 8 workers × 5 threads; Async::Cable ran Falcon with 8 processes.
 
 ### Roundtrip latency (steady network, 100% delivery)
 
 AnyCable is fastest at both sizes: fan-out happens in the Go gateway rather
 than in Ruby, so it stays at single-digit milliseconds where the in-process
-adapters climb with load. Action Cable on Puma is close behind; AsyncCable
+adapters climb with load. Action Cable on Puma is close behind; Async::Cable
 on Falcon sits a touch higher; Solid Cable carries a fixed floor from its
 100 ms database poll.
 
 | Adapter | 1K p50 / p99 | 5K p50 / p99 |
 | --- | --- | --- |
 | Solid Cable | 62 / 119 ms | 74 / 164 ms |
-| AsyncCable (Falcon) | 11 / 80 ms | 20 / 71 ms |
+| Async::Cable (Falcon) | 11 / 80 ms | 20 / 71 ms |
 | Action Cable (Puma) | 9 / 47 ms | 13 / 57 ms |
 | AnyCable | **4 / 23 ms** | **7 / 31 ms** |
 
@@ -110,7 +110,7 @@ identically here, because the loss is in the protocol, not the runtime.
 | --- | --- | --- | --- |
 | Solid Cable | **78.1%** | 71 ms | no resume |
 | Action Cable | **78.1%** | 12 ms | no resume |
-| AsyncCable (Falcon) | **78.1%** | 18 ms | no resume |
+| Async::Cable (Falcon) | **78.1%** | 18 ms | no resume |
 | AnyCable | **99.9%** | 7 ms | ~6.0 s |
 
 AnyCable's longer p99 is the resumed history landing a beat late on
@@ -129,7 +129,7 @@ tightest tail; Solid Cable's poll shows in its p99.
 | --- | --- |
 | Solid Cable | 100% / 200 ms |
 | Action Cable | 100% / 84 ms |
-| AsyncCable (Falcon) | 100% / 112 ms |
+| Async::Cable (Falcon) | 100% / 112 ms |
 | AnyCable | **100% / 31 ms** |
 
 **Idle-to-break, on identical 32 GB boxes, default 8-worker config.** Ramped
@@ -140,12 +140,12 @@ idle connections until the holding box failed (raw data in
 | --- | --- | --- | --- |
 | Action Cable (Puma) | ~52K | 2.3 GB | 8-worker file-descriptor ceiling |
 | Solid Cable (Puma) | ~52K | 2.5 GB | 8-worker file-descriptor ceiling |
-| AsyncCable (Falcon) | ~97K | 27 GB | memory, ~290 KB/conn |
+| Async::Cable (Falcon) | ~97K | 27 GB | memory, ~290 KB/conn |
 | AnyCable (Go gateway) | **600K+** | 27 GB | not broken; load fleet maxed out |
 
 Three findings. The Puma adapters wall at ~52K using only ~2.5 GB: an
 8-worker file-descriptor ceiling, not memory (raising worker fd limits
-lifts it). AsyncCable on Falcon is memory-bound at ~97K, because each
+lifts it). Async::Cable on Falcon is memory-bound at ~97K, because each
 fiber-backed connection costs roughly 290 KB, about six times the others.
 AnyCable held 600K idle connections with zero failures across a 50-runner
 fleet before we ran out of load generators; its gateway memory scaled
@@ -177,7 +177,7 @@ redeploy before the reconnect storm settled.
 | --- | --- | --- | --- |
 | Action Cable | all 5,000 | 7.5 s | 96.3% (187 still out at cutoff) |
 | Solid Cable | all 5,000 | 7.6 s | 95.7% (215 still out at cutoff) |
-| AsyncCable (Falcon) | all 5,000 | 8.0 s | 96.4% (179 still out at cutoff) |
+| Async::Cable (Falcon) | all 5,000 | 8.0 s | 96.4% (179 still out at cutoff) |
 | AnyCable | **0** | **0 s** | n/a |
 
 The AnyCable run redeployed its Rails RPC backend the same way; the gateway
@@ -187,7 +187,7 @@ downtime is zero by construction.
 ## The takeaway
 
 On Rails, AnyCable leads on latency at every scale (7 ms p50 at 5K vs 13 ms
-for Action Cable, 20 ms for AsyncCable, 74 ms for Solid Cable), because
+for Action Cable, 20 ms for Async::Cable, 74 ms for Solid Cable), because
 fan-out runs in Go off the Ruby process. It wins everything that decides
 whether realtime holds up in production: 100% delivery under jitter where
 the base protocol drops about a fifth of broadcasts, and every connection
@@ -195,7 +195,7 @@ kept alive across an app deploy where the in-process adapters drop all of
 them. Capacity ties at everyday sizes (all four hold 10K at 100%) but splits
 sharply past that: AnyCable held 600K idle connections where the Puma
 adapters wall at ~52K on a file-descriptor ceiling and Falcon runs out of
-memory at ~97K. AsyncCable on Falcon is a real alternative runtime to
+memory at ~97K. Async::Cable on Falcon is a real alternative runtime to
 Puma with latency and capacity in the same range, but it shares the
 in-process limits: at-most-once and deploy-fragile. Solid Cable's own edge
 is operational: no Redis, just the database, at the cost of a fixed
