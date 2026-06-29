@@ -145,7 +145,9 @@ const shardSpecs: ShardSpec[] = shardUrls.map((url, i) => ({
   query: {
     n: perShardN,
     total: totalMessages,
-    interval: intervalMs,
+    // Runner reads `intervalMs` (throughputParamsFromQuery); sending `interval`
+    // silently fell back to the 100ms default and ignored the requested rate.
+    intervalMs: intervalMs,
     ramp: rampPerSec,
     drain: drainSec,
     publisher,
