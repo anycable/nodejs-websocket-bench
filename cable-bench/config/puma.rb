@@ -28,6 +28,13 @@
 threads_count = ENV.fetch("RAILS_MAX_THREADS", 3)
 threads threads_count, threads_count
 
+# Run WEB_CONCURRENCY worker processes (default 1). The stock Rails puma.rb
+# omits this directive, so WEB_CONCURRENCY was silently ignored and Puma ran a
+# single process regardless. We set it explicitly so the Action Cable target's
+# process count matches the Falcon target's `falcon serve --count` for an
+# apples-to-apples WS-engine comparison.
+workers ENV.fetch("WEB_CONCURRENCY", 1).to_i
+
 # Bind IPv6 dual-stack (`[::]`) rather than the default IPv4 `0.0.0.0`: Railway's
 # private network routes over IPv6, so internal clients (the bench-runner fleet)
 # can only reach Puma on `[::]`. On Linux this also accepts IPv4, and it works
