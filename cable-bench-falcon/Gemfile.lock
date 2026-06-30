@@ -1,3 +1,13 @@
+GIT
+  remote: https://github.com/socketry/async-cable.git
+  revision: 27181dff124d2e5a933cb9abf2581c8e86532956
+  ref: 27181dff124d2e5a933cb9abf2581c8e86532956
+  specs:
+    async-cable (0.3.1)
+      actioncable (>= 8.1.0.alpha)
+      async (~> 2.9)
+      async-websocket
+
 GEM
   remote: https://rubygems.org/
   specs:
@@ -88,10 +98,6 @@ GEM
       io-event (~> 1.11)
       metrics (~> 0.12)
       traces (~> 0.18)
-    async-cable (0.3.1)
-      actioncable-next
-      async (~> 2.9)
-      async-websocket
     async-container (0.37.0)
       async (~> 2.22)
     async-http (0.95.1)
@@ -415,7 +421,7 @@ PLATFORMS
 
 DEPENDENCIES
   actioncable-next
-  async-cable (~> 0.3.1)
+  async-cable!
   bootsnap
   brakeman
   bundler-audit
@@ -451,7 +457,7 @@ CHECKSUMS
   activesupport (8.1.3) sha256=21a5e0dfbd4c3ddd9e1317ec6a4d782fa226e7867dc70b0743acda81a1dca20e
   ast (2.4.3) sha256=954615157c1d6a382bc27d690d973195e79db7f55e9765ac7c481c60bdb4d383
   async (2.40.0) sha256=52c7cf92b7e12fec4054f721b2fc9df401940d65a076f7e771cd6af18947af66
-  async-cable (0.3.1) sha256=437eaf75ffb52381167391aa4178bf5b3d899d10cfd6a4a8add31d05433c4974
+  async-cable (0.3.1)
   async-container (0.37.0) sha256=16bd50a6d3ba818d917160a96a965a2cde0fd0e9959715741cbeeba90d68d315
   async-http (0.95.1) sha256=0c3dd458c204c06d5c4b20b01bbec4794a1203db627fb2ce536e1799ec14786c
   async-http-cache (0.4.6) sha256=2038d1f093182f16b50b4db271c25085e3938da10bfcfc2904cadb0530fddfd6

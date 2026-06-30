@@ -18,7 +18,15 @@ gem "sqlite3", ">= 2.1"
 # (async ecosystem) instead of Puma's threads. Same Action Cable wire protocol;
 # the WebSockets are handled by Async::Cable::Middleware on a Falcon reactor.
 gem "falcon"
-gem "async-cable", "~> 0.3.1", require: "async/cable"
+# Pinned to async-cable @27181dff1 (2026-05-29): the 0.3.1 release lacks
+# Socket#raw_transmit, which actioncable-next fastlane broadcasts require
+# (without it fastlane raises NoMethodError -> 0% delivery). This commit adds
+# it natively and still allows Rails 8.1 (gemspec actioncable >= 8.1.0.alpha).
+# We do NOT use main HEAD: the later Executor commit (dddef54c) bumped the
+# gemspec to actioncable >= 8.2.0.alpha (edge Rails only). We instead vendor
+# that fiber Executor in config/initializers/async_cable_executor.rb, since
+# its code is self-contained and async-cable does not auto-wire it anyway.
+gem "async-cable", github: "socketry/async-cable", ref: "27181dff124d2e5a933cb9abf2581c8e86532956", require: "async/cable"
 
 # Use JavaScript with ESM import maps [https://github.com/rails/importmap-rails]
 gem "importmap-rails"
