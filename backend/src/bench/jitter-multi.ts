@@ -71,6 +71,7 @@ const PROTOCOL_TO_ENDPOINT: Record<string, string> = {
   socketio: "bench-jitter-socketio",
   "socketio-csr": "bench-jitter-socketio-csr",
   uws: "bench-jitter-uws",
+  centrifugo: "bench-jitter-centrifugo",
 };
 const endpoint = PROTOCOL_TO_ENDPOINT[protocol];
 if (!endpoint) {
@@ -91,6 +92,10 @@ if (protocol === "anycable") {
   // Action Cable wire protocol; the nodejs $pubsub targets leave these unset.
   if (process.env.CHANNEL) protocolQuery.channel = process.env.CHANNEL;
   if (process.env.AC_PROTOCOL) protocolQuery.acProtocol = process.env.AC_PROTOCOL;
+  // Faster client reconnect (first attempt ~RECONNECT_BASE_MS) to shrink the
+  // resume-tail p99 after transient drops.
+  if (process.env.RECONNECT_BASE_MS)
+    protocolQuery.reconnectBaseMs = process.env.RECONNECT_BASE_MS;
 }
 if (protocol === "socketio" || protocol === "socketio-csr") {
   if (process.env.SERVER_URL) protocolQuery.serverUrl = process.env.SERVER_URL;
@@ -98,6 +103,14 @@ if (protocol === "socketio" || protocol === "socketio-csr") {
 if (protocol === "uws") {
   if (process.env.UWS_WS_URL) protocolQuery.wsUrl = process.env.UWS_WS_URL;
   if (process.env.UWS_HTTP_URL) protocolQuery.httpUrl = process.env.UWS_HTTP_URL;
+}
+if (protocol === "centrifugo") {
+  if (process.env.CENTRIFUGO_WS_URL) protocolQuery.wsUrl = process.env.CENTRIFUGO_WS_URL;
+  if (process.env.CENTRIFUGO_HTTP_URL) protocolQuery.httpUrl = process.env.CENTRIFUGO_HTTP_URL;
+  if (process.env.CENTRIFUGO_API_KEY) protocolQuery.apiKey = process.env.CENTRIFUGO_API_KEY;
+  if (process.env.CENTRIFUGO_TOKEN_SECRET)
+    protocolQuery.tokenSecret = process.env.CENTRIFUGO_TOKEN_SECRET;
+  if (process.env.NAMESPACE) protocolQuery.namespace = process.env.NAMESPACE;
 }
 
 console.log(

@@ -10,7 +10,7 @@
 //   4. After publishing finishes (or `durationSec` elapses), summarizes.
 
 import WebSocket from "ws";
-import { createCable } from "@anycable/core";
+import { createCable, backoffWithJitter } from "@anycable/core";
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./core/stats.js";
@@ -127,6 +127,11 @@ export interface AnycableUrls {
   // resume machinery; vanilla Action Cable and Solid Cable speak the base
   // protocol ("actioncable-v1-json").
   acProtocol?: string;
+  // Base delay (ms) for the client's reconnect backoff. When set, the first
+  // reconnect fires in ~reconnectBaseMs (then exponential x2 up to 5s) instead
+  // of @anycable/core's multi-second default. Smaller values shrink the
+  // resume-tail p99 after a transient drop (the tail = drop + reconnect delay).
+  reconnectBaseMs?: number;
 }
 
 export async function runJitterAnycable(
@@ -151,6 +156,15 @@ export async function runJitterAnycable(
       // The @anycable/core types don't include "error" yet; the runtime
       // accepts any of error|warn|info|debug.
       logLevel: "error" as never,
+      ...(urls.reconnectBaseMs && urls.reconnectBaseMs > 0
+        ? {
+            reconnectStrategy: backoffWithJitter(urls.reconnectBaseMs, {
+              backoffRate: 2,
+              jitterRatio: 0.2,
+              maxInterval: 5000,
+            }),
+          }
+        : {}),
     });
     cable.on("close", () => {});
     cable.on("disconnect", () => {});

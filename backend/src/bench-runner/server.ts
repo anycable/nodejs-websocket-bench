@@ -208,6 +208,11 @@ app.post("/bench-jitter-anycable", async (req, res) => {
   // $pubsub channel over the extended protocol.
   const channel = (req.query.channel as string) || undefined;
   const acProtocol = (req.query.acProtocol as string) || undefined;
+  // `?reconnectBaseMs=200` makes the client's first reconnect fire in ~200ms
+  // (vs the multi-second @anycable/core default), shrinking the resume-tail p99.
+  const reconnectBaseMs = req.query.reconnectBaseMs
+    ? parseInt(req.query.reconnectBaseMs as string, 10)
+    : undefined;
   await respondAsync(req, res, () =>
     runJitterAnycable(params, {
       cableUrl,
@@ -215,6 +220,7 @@ app.post("/bench-jitter-anycable", async (req, res) => {
       broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
       channel,
       acProtocol,
+      reconnectBaseMs,
     }),
   );
 });
