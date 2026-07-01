@@ -211,24 +211,18 @@ export async function runJitterAnycable(
           // a connection. If the cable is already mid-reconnect (no `ws`
           // ref), we skip the count so csrResumeRatePct denominators stay
           // honest.
-          if (terminateCableWs(cable)) {
-            stat.jitterCount++;
-          }
-          // Enforce a real ~jitterDurationMs network outage. The Monitor
-          // reconnects on its own backoff, so without this the offline
-          // window would be the backoff delay, not a fixed outage — making
-          // the delivery number depend on the client's reconnect config
-          // rather than measuring a standard 2s network drop. Re-terminate
-          // any socket that comes back up until the window elapses, keeping
-          // the client offline for the full duration regardless of backoff.
-          // After the window we stop and let it reconnect + resume, so the
-          // client's (fast) backoff only governs how quickly it recovers,
-          // not how much it loses.
-          const offlineUntil = Date.now() + p.jitterDurationMs;
-          while (Date.now() < offlineUntil) {
-            await new Promise((r) => setTimeout(r, 50));
-            terminateCableWs(cable);
-          }
+          // Simulate a standard ~jitterDurationMs network outage. Cleanly
+          // take the cable offline: cable.disconnect() emits `close`, which
+          // makes the Monitor CANCEL (not schedule) reconnect, so the client
+          // stays offline for exactly the outage window regardless of its
+          // reconnect backoff. The session id is retained (never cleared), so
+          // on reconnect AnyCable resumes the messages broadcast during the
+          // outage; at-most-once adapters simply lose them. Backoff only
+          // governs recovery speed elsewhere, not the outage length here.
+          stat.jitterCount++;
+          cable.disconnect();
+          await new Promise((r) => setTimeout(r, p.jitterDurationMs));
+          cable.connect().catch(() => {});
           next = Date.now() + (p.jitterIntervalSec + Math.random() * 5) * 1000;
         }
         await new Promise((r) => setTimeout(r, 500));
