@@ -96,6 +96,9 @@ if (protocol === "anycable") {
   // resume-tail p99 after transient drops.
   if (process.env.RECONNECT_BASE_MS)
     protocolQuery.reconnectBaseMs = process.env.RECONNECT_BASE_MS;
+  // Drive the official @rails/actioncable client instead of @anycable/core
+  // (for Action Cable / Solid Cable / Async::Cable targets).
+  if (process.env.CLIENT_LIB) protocolQuery.clientLib = process.env.CLIENT_LIB;
 }
 if (protocol === "socketio" || protocol === "socketio-csr") {
   if (process.env.SERVER_URL) protocolQuery.serverUrl = process.env.SERVER_URL;

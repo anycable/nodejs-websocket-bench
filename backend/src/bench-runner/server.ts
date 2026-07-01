@@ -213,6 +213,10 @@ app.post("/bench-jitter-anycable", async (req, res) => {
   const reconnectBaseMs = req.query.reconnectBaseMs
     ? parseInt(req.query.reconnectBaseMs as string, 10)
     : undefined;
+  // `?clientLib=actioncable` drives the official @rails/actioncable client
+  // (for Action Cable / Solid Cable / Async::Cable); default @anycable/core.
+  const clientLib =
+    (req.query.clientLib as string) === "actioncable" ? "actioncable" : undefined;
   await respondAsync(req, res, () =>
     runJitterAnycable(params, {
       cableUrl,
@@ -221,6 +225,7 @@ app.post("/bench-jitter-anycable", async (req, res) => {
       channel,
       acProtocol,
       reconnectBaseMs,
+      clientLib,
     }),
   );
 });

@@ -11,6 +11,15 @@
 
 import WebSocket from "ws";
 import { createCable, backoffWithJitter } from "@anycable/core";
+import * as ActionCable from "@rails/actioncable";
+
+// @rails/actioncable is browser-oriented; give it a WebSocket implementation
+// so the official Rails client runs under Node. Used for the Action Cable /
+// Solid Cable / Async::Cable targets (clientLib="actioncable") so the bench
+// exercises the client a real Rails app ships with — its own reconnect monitor
+// and no resume — while AnyCable keeps @anycable/core (extended protocol).
+(ActionCable.adapters as { WebSocket: unknown }).WebSocket =
+  WebSocket as unknown;
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./core/stats.js";
@@ -131,7 +140,13 @@ export interface AnycableUrls {
   // reconnect fires in ~reconnectBaseMs (then exponential x2 up to 5s) instead
   // of @anycable/core's multi-second default. Smaller values shrink the
   // resume-tail p99 after a transient drop (the tail = drop + reconnect delay).
+  // Only applies to the @anycable/core client.
   reconnectBaseMs?: number;
+  // Which JS client to drive with. "anycable" (default) = @anycable/core
+  // (extended protocol, resume) for the AnyCable target. "actioncable" =
+  // @rails/actioncable (the official Rails client, base protocol, no resume)
+  // for the Action Cable / Solid Cable / Async::Cable targets.
+  clientLib?: "anycable" | "actioncable";
 }
 
 export async function runJitterAnycable(
@@ -144,41 +159,76 @@ export async function runJitterAnycable(
   const rss = trackPeakRss();
 
   const stats: ClientStat[] = [];
-  const cables: ReturnType<typeof createCable>[] = [];
+  // Unified control surface over the two client libraries so the jitter loop
+  // and teardown stay client-agnostic. disconnect()/connect() take the client
+  // cleanly offline and back — a standard fixed-length outage regardless of
+  // the client's own backoff.
+  interface JitterConn {
+    disconnect(): void;
+    connect(): void;
+  }
+  const conns: JitterConn[] = [];
+  const useActionCable = urls.clientLib === "actioncable";
 
   for (let i = 0; i < p.n; i++) {
     const stat = newStat();
     stats.push(stat);
 
-    const cable = createCable(urls.cableUrl, {
-      websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
-      protocol: (urls.acProtocol ?? "actioncable-v1-ext-json") as never,
-      // The @anycable/core types don't include "error" yet; the runtime
-      // accepts any of error|warn|info|debug.
-      logLevel: "error" as never,
-      ...(urls.reconnectBaseMs && urls.reconnectBaseMs > 0
-        ? {
-            reconnectStrategy: backoffWithJitter(urls.reconnectBaseMs, {
-              backoffRate: 2,
-              jitterRatio: 0.2,
-              maxInterval: 5000,
-            }),
-          }
-        : {}),
-    });
-    cable.on("close", () => {});
-    cable.on("disconnect", () => {});
-    cable.on("connect", () => {
-      stat.everConnected = true;
-    });
-    // "$pubsub" -> anycable-go's signed pub/sub channel (streamFrom). Any
-    // other value -> a real Rails channel subscribed with { stream_name }.
-    const channel =
-      urls.channel && urls.channel !== "$pubsub"
-        ? cable.subscribeTo(urls.channel, { stream_name: p.stream })
-        : cable.streamFrom(p.stream);
-    channel.on("message", (msg: unknown) => recordMsg(stat, msg));
-    cables.push(cable);
+    if (useActionCable) {
+      // Official Rails client. createConsumer connects lazily; the
+      // subscription re-establishes on reconnect (no resume, base protocol).
+      const consumer = ActionCable.createConsumer(urls.cableUrl);
+      consumer.subscriptions.create(
+        { channel: urls.channel ?? "BenchmarkChannel", stream_name: p.stream },
+        {
+          connected() {
+            stat.everConnected = true;
+          },
+          received(data: unknown) {
+            recordMsg(stat, data);
+          },
+        }
+      );
+      conns.push({
+        disconnect: () => consumer.disconnect(),
+        connect: () => consumer.connect(),
+      });
+    } else {
+      const cable = createCable(urls.cableUrl, {
+        websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
+        protocol: (urls.acProtocol ?? "actioncable-v1-ext-json") as never,
+        // The @anycable/core types don't include "error" yet; the runtime
+        // accepts any of error|warn|info|debug.
+        logLevel: "error" as never,
+        ...(urls.reconnectBaseMs && urls.reconnectBaseMs > 0
+          ? {
+              reconnectStrategy: backoffWithJitter(urls.reconnectBaseMs, {
+                backoffRate: 2,
+                jitterRatio: 0.2,
+                maxInterval: 5000,
+              }),
+            }
+          : {}),
+      });
+      cable.on("close", () => {});
+      cable.on("disconnect", () => {});
+      cable.on("connect", () => {
+        stat.everConnected = true;
+      });
+      // "$pubsub" -> anycable-go's signed pub/sub channel (streamFrom). Any
+      // other value -> a real Rails channel subscribed with { stream_name }.
+      const channel =
+        urls.channel && urls.channel !== "$pubsub"
+          ? cable.subscribeTo(urls.channel, { stream_name: p.stream })
+          : cable.streamFrom(p.stream);
+      channel.on("message", (msg: unknown) => recordMsg(stat, msg));
+      conns.push({
+        disconnect: () => cable.disconnect(),
+        connect: () => {
+          cable.connect().catch(() => {});
+        },
+      });
+    }
 
     await maybePauseForRamp(p, i, "jitter-ac");
   }
@@ -195,34 +245,22 @@ export async function runJitterAnycable(
   });
 
   const endAt = Date.now() + p.durationSec * 1000;
-  const jitterTasks = cables.map((cable, i) =>
+  const jitterTasks = conns.map((conn, i) =>
     (async () => {
       const stat = stats[i];
       let next = Date.now() + (5 + Math.random() * p.jitterIntervalSec) * 1000;
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
-          // Force-close the underlying TCP socket — same semantics as
-          // the Socket.io test (raw.terminate()). The cable's Monitor
-          // detects the close and reconnects with its built-in backoff,
-          // mirroring socket.io-client's retry path. Don't call
-          // cable.connect() manually — let the reconnect machinery run.
-          //
-          // Only count the jitter event when terminate actually severed
-          // a connection. If the cable is already mid-reconnect (no `ws`
-          // ref), we skip the count so csrResumeRatePct denominators stay
-          // honest.
-          // Simulate a standard ~jitterDurationMs network outage. Cleanly
-          // take the cable offline: cable.disconnect() emits `close`, which
-          // makes the Monitor CANCEL (not schedule) reconnect, so the client
-          // stays offline for exactly the outage window regardless of its
-          // reconnect backoff. The session id is retained (never cleared), so
-          // on reconnect AnyCable resumes the messages broadcast during the
-          // outage; at-most-once adapters simply lose them. Backoff only
-          // governs recovery speed elsewhere, not the outage length here.
+          // Simulate a standard ~jitterDurationMs network outage. disconnect()
+          // takes the client cleanly offline (its reconnect monitor is stopped,
+          // so the outage length is fixed regardless of backoff); after the
+          // window connect() brings it back. AnyCable resumes the messages
+          // broadcast during the outage (session id retained), the
+          // @rails/actioncable at-most-once clients simply lose them.
           stat.jitterCount++;
-          cable.disconnect();
+          conn.disconnect();
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
-          cable.connect().catch(() => {});
+          conn.connect();
           next = Date.now() + (p.jitterIntervalSec + Math.random() * 5) * 1000;
         }
         await new Promise((r) => setTimeout(r, 500));
@@ -232,9 +270,9 @@ export async function runJitterAnycable(
 
   await Promise.all([publishTask, ...jitterTasks]);
 
-  for (const c of cables) {
+  for (const conn of conns) {
     try {
-      c.disconnect();
+      conn.disconnect();
     } catch {
       /* tear-down errors are not interesting */
     }
