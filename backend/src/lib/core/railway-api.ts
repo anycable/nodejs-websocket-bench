@@ -59,7 +59,7 @@ export async function fetchMetric(args: FetchMetricArgs): Promise<DataPoint[]> {
         start: args.startDate,
         end: args.endDate,
         measurement: args.measurement,
-        sampleRate: args.sampleRate ?? 30,
+        sampleRate: args.sampleRate ?? 60,
       },
     }),
   });

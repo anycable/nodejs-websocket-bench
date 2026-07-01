@@ -214,9 +214,21 @@ export async function runJitterAnycable(
           if (terminateCableWs(cable)) {
             stat.jitterCount++;
           }
-          // Hold the "offline" window. Reconnect attempts may fire
-          // during or after this window — that's the system under test.
-          await new Promise((r) => setTimeout(r, p.jitterDurationMs));
+          // Enforce a real ~jitterDurationMs network outage. The Monitor
+          // reconnects on its own backoff, so without this the offline
+          // window would be the backoff delay, not a fixed outage — making
+          // the delivery number depend on the client's reconnect config
+          // rather than measuring a standard 2s network drop. Re-terminate
+          // any socket that comes back up until the window elapses, keeping
+          // the client offline for the full duration regardless of backoff.
+          // After the window we stop and let it reconnect + resume, so the
+          // client's (fast) backoff only governs how quickly it recovers,
+          // not how much it loses.
+          const offlineUntil = Date.now() + p.jitterDurationMs;
+          while (Date.now() < offlineUntil) {
+            await new Promise((r) => setTimeout(r, 50));
+            terminateCableWs(cable);
+          }
           next = Date.now() + (p.jitterIntervalSec + Math.random() * 5) * 1000;
         }
         await new Promise((r) => setTimeout(r, 500));
