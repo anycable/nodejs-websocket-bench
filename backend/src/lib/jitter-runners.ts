@@ -14,10 +14,25 @@ import { createCable, backoffWithJitter } from "@anycable/core";
 import * as ActionCable from "@rails/actioncable";
 
 // @rails/actioncable is browser-oriented; give it a WebSocket implementation
-// so the official Rails client runs under Node. Used for the Action Cable /
-// Solid Cable / Async::Cable targets (clientLib="actioncable") so the bench
-// exercises the client a real Rails app ships with — its own reconnect monitor
-// and no resume — while AnyCable keeps @anycable/core (extended protocol).
+// and stub the browser globals its ConnectionMonitor touches (addEventListener
+// for online/offline + visibility events, document.visibilityState) so the
+// official Rails client runs under Node. Used for the Action Cable / Solid
+// Cable / Async::Cable targets (clientLib="actioncable") so the bench exercises
+// the client a real Rails app ships with — its own reconnect monitor and no
+// resume — while AnyCable keeps @anycable/core (extended protocol).
+{
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (typeof g.addEventListener !== "function") g.addEventListener = () => {};
+  if (typeof g.removeEventListener !== "function")
+    g.removeEventListener = () => {};
+  if (typeof g.document === "undefined") {
+    g.document = {
+      visibilityState: "visible",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+  }
+}
 (ActionCable.adapters as { WebSocket: unknown }).WebSocket =
   WebSocket as unknown;
 import { io as ioClient, Socket } from "socket.io-client";
