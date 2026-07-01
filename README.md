@@ -164,7 +164,7 @@ benchmark/
 └── backend/
     ├── Dockerfile                 # One image; SERVICE_ENTRY picks the entry point
     ├── package.json
-    ├── results/                   # CSV/JSON output (gitignored)
+    ├── results/                   # published rails-*/socketioxide-* results tracked; raw run dumps ignored
     └── src/
         ├── publisher.ts                       # Standalone HTTP publisher (legacy)
         ├── socketio/server.ts                 # /_broadcast + /publish-local

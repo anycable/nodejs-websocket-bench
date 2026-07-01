@@ -61,13 +61,18 @@ export async function runAvalancheAnycable(
   let allReconnectedAt = 0;
   const reconnectTimes: number[] = [];
 
-  // Shared connect/disconnect accounting for both client libraries. A connect
-  // during the ramp counts an initial connection; a connect after a detected
-  // restart counts a recovery (and its time-to-reconnect).
-  const handleConnect = (isReconnect: boolean) => {
+  // Per-connection up/down state so accounting is idempotent: @anycable/core
+  // fires both "disconnect" and "close" on a single drop, and clients can emit
+  // repeat events, so we only count actual transitions (up->down, down->up)
+  // rather than raw events. A first connect during the ramp counts an initial
+  // connection; a connect after a detected restart counts a recovery.
+  const up: boolean[] = new Array(p.n).fill(false);
+  const handleUp = (i: number) => {
     if (tearingDown) return;
+    if (up[i]) return; // already up — ignore duplicate connect events
+    up[i] = true;
     if (!initialConnectDone) {
-      if (!isReconnect) initiallyConnected++;
+      initiallyConnected++;
       return;
     }
     if (restartDetectedAt > 0) {
@@ -80,8 +85,10 @@ export async function runAvalancheAnycable(
       }
     }
   };
-  const handleDrop = () => {
+  const handleDown = (i: number) => {
     if (tearingDown || !initialConnectDone) return;
+    if (!up[i]) return; // already down — collapse close+disconnect into one drop
+    up[i] = false;
     disconnected++;
     const now = Date.now();
     if (disconnected === 1) {
@@ -100,10 +107,10 @@ export async function runAvalancheAnycable(
         { channel: channelName, stream_name: p.stream },
         {
           connected() {
-            handleConnect(false);
+            handleUp(i);
           },
           disconnected() {
-            handleDrop();
+            handleDown(i);
           },
         }
       );
@@ -114,11 +121,11 @@ export async function runAvalancheAnycable(
         protocol: protocol as never,
         logLevel: "error" as never,
       });
-      cable.on("connect", (event?: { reconnect?: boolean }) =>
-        handleConnect(!!(event && event.reconnect))
-      );
-      cable.on("disconnect", handleDrop);
-      cable.on("close", handleDrop);
+      // Both "disconnect" and "close" can fire for a single drop; handleDown is
+      // idempotent per connection, so the drop is counted once.
+      cable.on("connect", () => handleUp(i));
+      cable.on("disconnect", () => handleDown(i));
+      cable.on("close", () => handleDown(i));
       // Subscribing triggers the connection. "$pubsub" -> streamFrom (signed
       // pub/sub), any other channel -> a real Rails channel with { stream_name }.
       if (channelName !== "$pubsub") {

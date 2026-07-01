@@ -149,6 +149,9 @@ end
 # actioncable-next's own ActionCable::Server::Base#executor.
 require "action_cable"
 module AsyncCableFiberExecutor
+  # Reuses ActionCable::Server::Base's own @mutex/@executor ivars (set in its
+  # #initialize), matching actioncable-next's lazy #executor. If a future Rails
+  # bump stops initializing @mutex, this needs a guard.
   def executor
     @executor || @mutex.synchronize { @executor ||= Async::Cable::Executor.new }
   end

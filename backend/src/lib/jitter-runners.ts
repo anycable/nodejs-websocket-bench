@@ -156,10 +156,13 @@ export async function runJitterAnycable(
   // Unified control surface over the two client libraries so the jitter loop
   // and teardown stay client-agnostic. disconnect()/connect() take the client
   // cleanly offline and back — a standard fixed-length outage regardless of
-  // the client's own backoff.
+  // the client's own backoff. destroy() fully tears the client down at the end
+  // of the run (stops the reconnect monitor too), so no consumer keeps
+  // reconnecting inside the long-lived bench-runner process.
   interface JitterConn {
     disconnect(): void;
     connect(): void;
+    destroy(): void;
   }
   const conns: JitterConn[] = [];
   const useActionCable = urls.clientLib === "actioncable";
@@ -198,6 +201,11 @@ export async function runJitterAnycable(
         },
         // No-op: the native monitor drives reconnection.
         connect: () => {},
+        // Full teardown: consumer.disconnect() also stops the ConnectionMonitor,
+        // so it does not keep reconnecting after the run (a bare socket close
+        // would leave the monitor polling and orphan a live consumer in the
+        // long-lived bench-runner process).
+        destroy: () => consumer.disconnect(),
       });
     } else {
       const cable = createCable(urls.cableUrl, {
@@ -233,6 +241,9 @@ export async function runJitterAnycable(
         connect: () => {
           cable.connect().catch(() => {});
         },
+        // @anycable/core's disconnect() already stops its Monitor, so teardown
+        // is the same call.
+        destroy: () => cable.disconnect(),
       });
     }
 
@@ -257,12 +268,19 @@ export async function runJitterAnycable(
       let next = Date.now() + (5 + Math.random() * p.jitterIntervalSec) * 1000;
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
-          // Simulate a standard ~jitterDurationMs network outage. disconnect()
-          // takes the client cleanly offline (its reconnect monitor is stopped,
-          // so the outage length is fixed regardless of backoff); after the
-          // window connect() brings it back. AnyCable resumes the messages
-          // broadcast during the outage (session id retained), the
-          // @rails/actioncable at-most-once clients simply lose them.
+          // Trigger a ~jitterDurationMs network drop. The two clients recover
+          // differently on purpose, so each reflects its real behavior:
+          //  - @anycable/core: disconnect() stops the Monitor (fixed offline
+          //    window = jitterDurationMs), connect() brings it back, and
+          //    AnyCable resumes messages broadcast during the outage (sid
+          //    retained). Effective outage ~= jitterDurationMs.
+          //  - @rails/actioncable: disconnect() drops the socket, connect() is a
+          //    no-op, and the client's own poll-based ConnectionMonitor
+          //    reconnects on its native schedule. Effective outage =
+          //    jitterDurationMs + native reconnect latency (seconds), and with
+          //    no resume every message in that window is lost. So its delivery
+          //    reflects both the missing replay AND the real recovery latency of
+          //    the official client — not just a fixed 2s drop.
           stat.jitterCount++;
           conn.disconnect();
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
@@ -278,7 +296,7 @@ export async function runJitterAnycable(
 
   for (const conn of conns) {
     try {
-      conn.disconnect();
+      conn.destroy();
     } catch {
       /* tear-down errors are not interesting */
     }
