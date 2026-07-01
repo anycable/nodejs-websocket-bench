@@ -82,7 +82,6 @@ const PROTOCOL_TO_ENDPOINT: Record<string, string> = {
   socketio: "bench-throughput-socketio",
   "socketio-csr": "bench-throughput-socketio-csr",
   uws: "bench-throughput-uws",
-  centrifugo: "bench-throughput-centrifugo",
 };
 const endpoint = PROTOCOL_TO_ENDPOINT[protocol];
 if (!endpoint) {
@@ -110,14 +109,6 @@ if (protocol === "socketio" || protocol === "socketio-csr") {
 if (protocol === "uws") {
   if (process.env.UWS_WS_URL) protocolQuery.wsUrl = process.env.UWS_WS_URL;
   if (process.env.UWS_HTTP_URL) protocolQuery.httpUrl = process.env.UWS_HTTP_URL;
-}
-if (protocol === "centrifugo") {
-  if (process.env.CENTRIFUGO_WS_URL) protocolQuery.wsUrl = process.env.CENTRIFUGO_WS_URL;
-  if (process.env.CENTRIFUGO_HTTP_URL) protocolQuery.httpUrl = process.env.CENTRIFUGO_HTTP_URL;
-  if (process.env.CENTRIFUGO_API_KEY) protocolQuery.apiKey = process.env.CENTRIFUGO_API_KEY;
-  if (process.env.CENTRIFUGO_TOKEN_SECRET)
-    protocolQuery.tokenSecret = process.env.CENTRIFUGO_TOKEN_SECRET;
-  if (process.env.NAMESPACE) protocolQuery.namespace = process.env.NAMESPACE;
 }
 
 console.log(

@@ -49,14 +49,6 @@ import {
   runThroughputUws,
   type ThroughputParams,
 } from "../lib/throughput.js";
-import {
-  runJitterCentrifugo,
-  runThroughputCentrifugo,
-  runWhispersCentrifugo,
-  runIdleCentrifugo,
-  runAvalancheCentrifugo,
-  type CentrifugoUrls,
-} from "../lib/centrifugo-runners.js";
 
 const SOCKETIO_URL =
   process.env.SOCKETIO_URL || "http://socketio-server.railway.internal:3000";
@@ -90,30 +82,6 @@ const UWS_WS_URL =
   process.env.UWS_WS_URL || "ws://uws-server.railway.internal:3000/ws";
 const UWS_HTTP_URL =
   process.env.UWS_HTTP_URL || "http://uws-server.railway.internal:3000";
-// Centrifugo target (standalone Go WS server, like anycable-go). WS endpoint
-// is /connection/websocket; server API + publish live on the same port.
-const CENTRIFUGO_WS_URL =
-  process.env.CENTRIFUGO_WS_URL ||
-  "ws://centrifugo.railway.internal:8000/connection/websocket";
-const CENTRIFUGO_HTTP_URL =
-  process.env.CENTRIFUGO_HTTP_URL || "http://centrifugo.railway.internal:8000";
-const CENTRIFUGO_API_KEY =
-  process.env.CENTRIFUGO_API_KEY || "bench-centrifugo-api-key";
-const CENTRIFUGO_TOKEN_SECRET =
-  process.env.CENTRIFUGO_TOKEN_SECRET || "bench-centrifugo-secret";
-
-// Bundle the Centrifugo target config from query overrides + env defaults, so
-// every centrifugo endpoint targets the same service (or an override) the same
-// way the anycable endpoints accept ?cableUrl=.
-function centrifugoUrls(req: express.Request): CentrifugoUrls {
-  return {
-    wsUrl: (req.query.wsUrl as string) || CENTRIFUGO_WS_URL,
-    httpBase: (req.query.httpUrl as string) || CENTRIFUGO_HTTP_URL,
-    apiKey: (req.query.apiKey as string) || CENTRIFUGO_API_KEY,
-    tokenSecret: (req.query.tokenSecret as string) || CENTRIFUGO_TOKEN_SECRET,
-    channelNamespace: (req.query.namespace as string) || undefined,
-  };
-}
 
 const app = express();
 app.use(express.json());
@@ -609,85 +577,6 @@ app.post("/bench-avalanche-uws", async (req, res) => {
       { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
       wsUrl,
     ),
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Centrifugo benches. Centrifugo is a standalone Go WS server like anycable-go
-// (broadcast over HTTP), with built-in history/recovery, presence, and JWT —
-// the closest comparator to AnyCable in this suite. Each endpoint mirrors its
-// anycable twin; `?wsUrl=`, `?httpUrl=`, `?apiKey=`, `?tokenSecret=`,
-// `?namespace=` override the target.
-
-app.post("/bench-jitter-centrifugo", async (req, res) => {
-  const params = paramsFromQuery(req);
-  const urls = centrifugoUrls(req);
-  await respondAsync(req, res, () => runJitterCentrifugo(params, urls));
-});
-
-app.post("/bench-idle-centrifugo", async (req, res) => {
-  const n = parseInt((req.query.n as string) || "10000", 10);
-  const holdSec = parseInt((req.query.hold as string) || "60", 10);
-  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
-  const stream = (req.query.stream as string) || "idle-probe";
-  const shardLabel = (req.query.shard as string) || undefined;
-  const urls = centrifugoUrls(req);
-  await respondAsync(req, res, () =>
-    runIdleCentrifugo({ n, holdSec, rampPerSec, stream }, urls, shardLabel),
-  );
-});
-
-app.post("/bench-whispers-centrifugo", async (req, res) => {
-  const params = whispersParamsFromQuery(req);
-  const urls = centrifugoUrls(req);
-  // Whispers default to the "whisper" namespace (allow_publish_for_subscriber)
-  // unless the caller overrides with ?namespace=.
-  await respondAsync(req, res, () =>
-    runWhispersCentrifugo(params, { ...urls, channelNamespace: urls.channelNamespace ?? "whisper" }),
-  );
-});
-
-app.post("/bench-throughput-centrifugo", async (req, res) => {
-  const base = throughputParamsFromQuery(req, `tp-cfgo-${Date.now()}`);
-  const urls = centrifugoUrls(req);
-  // Centrifugo's HTTP publisher supports serial/pool/fireforget; map the
-  // AnyCable-only "nats" mode onto pool so a shared driver flag still works.
-  const publisher =
-    base.publisher === "pool" || base.publisher === "fireforget"
-      ? base.publisher
-      : base.publisher === "serial"
-        ? "serial"
-        : "pool";
-  await respondAsync(req, res, () =>
-    runThroughputCentrifugo(
-      {
-        n: base.n,
-        totalMessages: base.totalMessages,
-        intervalMs: base.intervalMs,
-        rampPerSec: base.rampPerSec,
-        stream: base.stream,
-        drainSec: base.drainSec,
-        publisher,
-        publisherConcurrency: base.publisherConcurrency,
-      },
-      urls,
-    ),
-  );
-});
-
-// Centrifugo avalanche / deploy resilience. Like AnyCable, Centrifugo is a
-// standalone process, so an app deploy never severs its connections (expected
-// disconnected ~= 0). Redeploying the centrifugo service itself is the only
-// thing that drops them; the operator triggers that during the prearm window.
-app.post("/bench-avalanche-centrifugo", async (req, res) => {
-  const n = parseInt((req.query.n as string) || "1000", 10);
-  const rampPerSec = parseInt((req.query.ramp as string) || "200", 10);
-  const prearmSec = parseInt((req.query.prearm as string) || "120", 10);
-  const recoveryWaitSec = parseInt((req.query.recoveryWait as string) || "240", 10);
-  const stream = (req.query.stream as string) || "avalanche-cfgo";
-  const urls = centrifugoUrls(req);
-  await respondAsync(req, res, () =>
-    runAvalancheCentrifugo({ n, rampPerSec, prearmSec, recoveryWaitSec, stream }, urls),
   );
 });
 

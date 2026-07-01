@@ -1,0 +1,225 @@
+{
+  "test": "idle-capacity-to-break",
+  "date": "2026-06-28",
+  "box": "Railway, 32GB plan limit per service, one shared-tenant window",
+  "load": "13 sharded bench-runners (Puma/Falcon ceilings); AnyCable rerun with 50 runners to 600K",
+  "in_process_config": "Puma WEB_CONCURRENCY=8 x RAILS_MAX_THREADS=5; Falcon COUNT=8",
+  "notes": [
+    "Connections ramped per-shard until the holding box failed (connected<95% target).",
+    "Puma adapters (Action Cable, Solid Cable) hard-cap ~52K at only ~2.5GB RAM: an 8-worker file-descriptor ceiling, not memory.",
+    "AsyncCable on Falcon is memory-bound: ~97K held at ~27GB (fibers ~290KB/conn, ~6x the others).",
+    "AnyCable (anycable-go gateway) held 600K with 0 failures on a 50-runner fleet; not broken. ~47KB/conn, memory wall near ~700K on the 32GB box. ~11x the Puma adapters.",
+    "All four hold 10K subscribers at 100% delivery (see rails-sharded-2026-06-28.json).",
+    "Per-connection RAM: Action Cable ~45KB, Solid Cable ~50KB, AnyCable ~47KB, AsyncCable/Falcon ~290KB. Puma's low ceiling is the per-worker fd wall reached well below the memory limit."
+  ],
+  "results": {
+    "solidcable": {
+      "rows": [
+        {
+          "per_shard": 4000,
+          "target": 52000,
+          "connected": 52000,
+          "failed": 0,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 2516.3,
+          "elapsed_s": 113.5,
+          "window": [
+            "2026-06-28T16:32:12.314Z",
+            "2026-06-28T16:33:44.932Z"
+          ]
+        },
+        {
+          "per_shard": 8000,
+          "target": 104000,
+          "connected": 51993,
+          "failed": 52007,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 2977.9,
+          "elapsed_s": 130.3,
+          "window": [
+            "2026-06-28T16:34:20.845Z",
+            "2026-06-28T16:36:10.305Z"
+          ]
+        }
+      ],
+      "done": true,
+      "broke": true
+    },
+    "actioncable": {
+      "rows": [
+        {
+          "per_shard": 4000,
+          "target": 52000,
+          "connected": 52000,
+          "failed": 0,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 2310.3,
+          "elapsed_s": 113.2,
+          "window": [
+            "2026-06-28T16:36:51.103Z",
+            "2026-06-28T16:38:23.447Z"
+          ]
+        },
+        {
+          "per_shard": 8000,
+          "target": 104000,
+          "connected": 50722,
+          "failed": 53278,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 2682.3,
+          "elapsed_s": 130.4,
+          "window": [
+            "2026-06-28T16:38:59.231Z",
+            "2026-06-28T16:40:48.698Z"
+          ]
+        }
+      ],
+      "done": true,
+      "broke": true
+    },
+    "asynccable": {
+      "rows": [
+        {
+          "per_shard": 4000,
+          "target": 52000,
+          "connected": 51713,
+          "failed": 287,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 13413.7,
+          "elapsed_s": 113.5,
+          "window": [
+            "2026-06-28T16:41:29.618Z",
+            "2026-06-28T16:43:02.215Z"
+          ]
+        },
+        {
+          "per_shard": 8000,
+          "target": 104000,
+          "connected": 97390,
+          "failed": 6610,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 27797.1,
+          "elapsed_s": 130.5,
+          "window": [
+            "2026-06-28T16:43:38.123Z",
+            "2026-06-28T16:45:27.668Z"
+          ]
+        }
+      ],
+      "done": true,
+      "broke": true
+    },
+    "anycable": {
+      "rows": [
+        {
+          "per_shard": 4000,
+          "target": 52000,
+          "connected": 52000,
+          "failed": 0,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 1874.4,
+          "elapsed_s": 115.2,
+          "window": [
+            "2026-06-28T16:46:08.666Z",
+            "2026-06-28T16:47:41.190Z"
+          ]
+        },
+        {
+          "per_shard": 8000,
+          "target": 104000,
+          "connected": 104000,
+          "failed": 0,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 4594.4,
+          "elapsed_s": 130.4,
+          "window": [
+            "2026-06-28T16:48:18.857Z",
+            "2026-06-28T16:50:08.328Z"
+          ]
+        },
+        {
+          "per_shard": 12000,
+          "target": 156000,
+          "connected": 131801,
+          "failed": 24199,
+          "shards_ok": 13,
+          "shards_err": 0,
+          "peak_mb": 7453.5,
+          "elapsed_s": 147.5,
+          "window": [
+            "2026-06-28T16:50:44.289Z",
+            "2026-06-28T16:52:50.830Z"
+          ]
+        }
+      ],
+      "done": true,
+      "broke": true
+    }
+  },
+  "anycable_bigfleet": {
+    "runners": 50,
+    "rows": [
+      {
+        "per_shard": 4000,
+        "target": 200000,
+        "connected": 200000,
+        "failed": 0,
+        "shards_ok": 50,
+        "shards_err": 0,
+        "per_shard_min": 4000,
+        "per_shard_max": 4000,
+        "gateway_peak_mb": 7358.3,
+        "rpc_peak_mb": 138.2,
+        "elapsed_s": 138.3,
+        "window": [
+          "2026-06-28T17:32:53.792Z",
+          "2026-06-28T17:34:50.836Z"
+        ]
+      },
+      {
+        "per_shard": 8000,
+        "target": 400000,
+        "connected": 400000,
+        "failed": 0,
+        "shards_ok": 50,
+        "shards_err": 0,
+        "per_shard_min": 8000,
+        "per_shard_max": 8000,
+        "gateway_peak_mb": 17057.2,
+        "rpc_peak_mb": 141.3,
+        "elapsed_s": 189.1,
+        "window": [
+          "2026-06-28T17:35:27.157Z",
+          "2026-06-28T17:38:15.128Z"
+        ]
+      },
+      {
+        "per_shard": 12000,
+        "target": 600000,
+        "connected": 600000,
+        "failed": 0,
+        "shards_ok": 50,
+        "shards_err": 0,
+        "per_shard_min": 12000,
+        "per_shard_max": 12000,
+        "gateway_peak_mb": 27657.8,
+        "rpc_peak_mb": 143.5,
+        "elapsed_s": 240.1,
+        "window": [
+          "2026-06-28T17:38:51.275Z",
+          "2026-06-28T17:42:30.271Z"
+        ]
+      }
+    ],
+    "broke_at": null,
+    "note": "AnyCable held 600K idle with 0 failures across all 50 shards; not broken (fleet-limited at 50x12K). Gateway RAM scaled linearly to 27GB at 600K (27657.8 MB = 27.0 GB; ~47KB/conn gross), ~84% of the 32GB box, so the real wall is ~700K, memory-bound. The RPC backend stayed flat at ~140MB. The earlier 132K (13 runners) was a load-fleet limit, not anycable-go."
+  }
+}
