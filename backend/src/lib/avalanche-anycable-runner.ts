@@ -20,12 +20,17 @@ import { createCable } from "@anycable/core";
 
 import { percentile } from "./core/stats.js";
 import { settleAfterRamp } from "./core/timing.js";
+import { ActionCable } from "./core/actioncable-node.js";
 import type { AvalancheParams, AvalancheResult } from "./avalanche-runner.js";
 
 export interface AvalancheAnycableUrls {
   cableUrl: string;
   channel?: string;
   acProtocol?: string;
+  // "actioncable" drives the official @rails/actioncable client (native
+  // reconnect, base protocol) for Action Cable / Solid Cable / Async::Cable;
+  // default @anycable/core for AnyCable.
+  clientLib?: "anycable" | "actioncable";
 }
 
 export async function runAvalancheAnycable(
@@ -38,7 +43,8 @@ export async function runAvalancheAnycable(
     `[avalanche-ac] target=${urls.cableUrl} channel=${channelName} proto=${protocol} n=${p.n} ramp=${p.rampPerSec}/s prearm=${p.prearmSec}s recoveryWait=${p.recoveryWaitSec}s`
   );
 
-  const cables: ReturnType<typeof createCable>[] = [];
+  const conns: { disconnect(): void }[] = [];
+  const useActionCable = urls.clientLib === "actioncable";
   const startedAt = Date.now();
 
   let initiallyConnected = 0;
@@ -55,53 +61,73 @@ export async function runAvalancheAnycable(
   let allReconnectedAt = 0;
   const reconnectTimes: number[] = [];
 
-  for (let i = 0; i < p.n; i++) {
-    const cable = createCable(urls.cableUrl, {
-      websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
-      protocol: protocol as never,
-      logLevel: "error" as never,
-    });
-
-    cable.on("connect", (event?: { reconnect?: boolean }) => {
-      if (tearingDown) return;
-      // First successful connect during the ramp.
-      if (!initialConnectDone) {
-        if (!(event && event.reconnect)) initiallyConnected++;
-        return;
-      }
-      // After ramp, a connect once a restart was detected is a recovery.
-      if (restartDetectedAt > 0) {
-        reconnected++;
-        const now = Date.now();
-        reconnectTimes.push(now - restartDetectedAt);
-        if (reconnected === 1) firstReconnectAt = now;
-        if (reconnected >= initiallyConnected * 0.95 && !allReconnectedAt) {
-          allReconnectedAt = now;
-        }
-      }
-    });
-
-    const onDrop = () => {
-      if (tearingDown || !initialConnectDone) return;
-      disconnected++;
-      const now = Date.now();
-      if (disconnected === 1) {
-        firstDisconnectAt = now;
-        restartDetectedAt = now;
-      }
-      if (disconnected === initiallyConnected) allDisconnectedAt = now;
-    };
-    cable.on("disconnect", onDrop);
-    cable.on("close", onDrop);
-
-    // Subscribing triggers the connection. "$pubsub" -> streamFrom (signed
-    // pub/sub), any other channel -> a real Rails channel with { stream_name }.
-    if (channelName !== "$pubsub") {
-      cable.subscribeTo(channelName, { stream_name: p.stream });
-    } else {
-      cable.streamFrom(p.stream);
+  // Shared connect/disconnect accounting for both client libraries. A connect
+  // during the ramp counts an initial connection; a connect after a detected
+  // restart counts a recovery (and its time-to-reconnect).
+  const handleConnect = (isReconnect: boolean) => {
+    if (tearingDown) return;
+    if (!initialConnectDone) {
+      if (!isReconnect) initiallyConnected++;
+      return;
     }
-    cables.push(cable);
+    if (restartDetectedAt > 0) {
+      reconnected++;
+      const now = Date.now();
+      reconnectTimes.push(now - restartDetectedAt);
+      if (reconnected === 1) firstReconnectAt = now;
+      if (reconnected >= initiallyConnected * 0.95 && !allReconnectedAt) {
+        allReconnectedAt = now;
+      }
+    }
+  };
+  const handleDrop = () => {
+    if (tearingDown || !initialConnectDone) return;
+    disconnected++;
+    const now = Date.now();
+    if (disconnected === 1) {
+      firstDisconnectAt = now;
+      restartDetectedAt = now;
+    }
+    if (disconnected === initiallyConnected) allDisconnectedAt = now;
+  };
+
+  for (let i = 0; i < p.n; i++) {
+    if (useActionCable) {
+      // Official Rails client — recovers on its own native monitor after the
+      // deploy drops it (no forced reconnect), so we measure its real recovery.
+      const consumer = ActionCable.createConsumer(urls.cableUrl);
+      consumer.subscriptions.create(
+        { channel: channelName, stream_name: p.stream },
+        {
+          connected() {
+            handleConnect(false);
+          },
+          disconnected() {
+            handleDrop();
+          },
+        }
+      );
+      conns.push({ disconnect: () => consumer.disconnect() });
+    } else {
+      const cable = createCable(urls.cableUrl, {
+        websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
+        protocol: protocol as never,
+        logLevel: "error" as never,
+      });
+      cable.on("connect", (event?: { reconnect?: boolean }) =>
+        handleConnect(!!(event && event.reconnect))
+      );
+      cable.on("disconnect", handleDrop);
+      cable.on("close", handleDrop);
+      // Subscribing triggers the connection. "$pubsub" -> streamFrom (signed
+      // pub/sub), any other channel -> a real Rails channel with { stream_name }.
+      if (channelName !== "$pubsub") {
+        cable.subscribeTo(channelName, { stream_name: p.stream });
+      } else {
+        cable.streamFrom(p.stream);
+      }
+      conns.push({ disconnect: () => cable.disconnect() });
+    }
 
     if ((i + 1) % p.rampPerSec === 0) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -142,7 +168,7 @@ export async function runAvalancheAnycable(
   }
 
   tearingDown = true;
-  for (const c of cables) {
+  for (const c of conns) {
     try {
       c.disconnect();
     } catch {

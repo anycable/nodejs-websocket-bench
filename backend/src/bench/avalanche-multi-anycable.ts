@@ -55,6 +55,7 @@ if (!cableUrl) {
 }
 const channel = process.env.CHANNEL;
 const acProtocol = process.env.AC_PROTOCOL;
+const clientLib = process.env.CLIENT_LIB;
 
 const targetServiceId = process.env.TARGET_SERVICE_ID;
 const targetEnvId = process.env.TARGET_ENV_ID;
@@ -113,6 +114,7 @@ async function runShard(url: string, label: string): Promise<ShardOutcome> {
   });
   if (channel) qs.set("channel", channel);
   if (acProtocol) qs.set("acProtocol", acProtocol);
+  if (clientLib) qs.set("clientLib", clientLib);
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), shardTimeoutMs);

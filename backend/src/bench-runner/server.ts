@@ -418,11 +418,13 @@ app.post("/bench-avalanche-anycable", async (req, res) => {
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
   const channel = (req.query.channel as string) || undefined;
   const acProtocol = (req.query.acProtocol as string) || undefined;
+  const clientLib =
+    (req.query.clientLib as string) === "actioncable" ? "actioncable" : undefined;
 
   await respondAsync(req, res, () =>
     runAvalancheAnycable(
       { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
-      { cableUrl, channel, acProtocol },
+      { cableUrl, channel, acProtocol, clientLib },
     ),
   );
 });

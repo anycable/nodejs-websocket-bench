@@ -11,30 +11,9 @@
 
 import WebSocket from "ws";
 import { createCable, backoffWithJitter } from "@anycable/core";
-import * as ActionCable from "@rails/actioncable";
-
-// @rails/actioncable is browser-oriented; give it a WebSocket implementation
-// and stub the browser globals its ConnectionMonitor touches (addEventListener
-// for online/offline + visibility events, document.visibilityState) so the
-// official Rails client runs under Node. Used for the Action Cable / Solid
-// Cable / Async::Cable targets (clientLib="actioncable") so the bench exercises
-// the client a real Rails app ships with — its own reconnect monitor and no
-// resume — while AnyCable keeps @anycable/core (extended protocol).
-{
-  const g = globalThis as unknown as Record<string, unknown>;
-  if (typeof g.addEventListener !== "function") g.addEventListener = () => {};
-  if (typeof g.removeEventListener !== "function")
-    g.removeEventListener = () => {};
-  if (typeof g.document === "undefined") {
-    g.document = {
-      visibilityState: "visible",
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    };
-  }
-}
-(ActionCable.adapters as { WebSocket: unknown }).WebSocket =
-  WebSocket as unknown;
+// The official Rails client (for the Action Cable / Solid Cable / Async::Cable
+// targets), set up to run under Node. AnyCable keeps @anycable/core.
+import { ActionCable } from "./core/actioncable-node.js";
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./core/stats.js";
@@ -205,8 +184,20 @@ export async function runJitterAnycable(
         }
       );
       conns.push({
-        disconnect: () => consumer.disconnect(),
-        connect: () => consumer.connect(),
+        // Drop the underlying socket uncleanly (like a network blip) but leave
+        // the ConnectionMonitor running, so the official Rails client recovers
+        // on its OWN native, poll-based schedule (seconds) rather than an
+        // immediate reconnect. This is what a real Action Cable app experiences.
+        disconnect: () => {
+          const conn = (
+            consumer as unknown as {
+              connection?: { webSocket?: { close?: () => void } };
+            }
+          ).connection;
+          conn?.webSocket?.close?.();
+        },
+        // No-op: the native monitor drives reconnection.
+        connect: () => {},
       });
     } else {
       const cable = createCable(urls.cableUrl, {
