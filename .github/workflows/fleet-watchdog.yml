@@ -1,0 +1,36 @@
+# Alerts (via a repo issue) when the Railway bench fleet is left running
+# between campaigns. Railway bills per-minute for allocated resources;
+# teardown is the mandatory final step of every run, and this is the net
+# under it. See scripts/fleet-watchdog.mjs.
+#
+# Setup (one-time, repo admin):
+#   1. Create a Railway ACCOUNT token at railway.com/account/tokens
+#      (CLI login tokens expire; account tokens persist).
+#   2. Add it as the RAILWAY_TOKEN repository secret.
+# PROJECT_ID / ENVIRONMENT_ID below match fleet-manifest.json.
+
+name: fleet-watchdog
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/fleet-watchdog.mjs
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          PROJECT_ID: fd842a43-8d78-48c0-879f-4b5311c8c004
+          ENVIRONMENT_ID: 284c9b0a-57cb-4281-a4bd-868473a94a47
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}

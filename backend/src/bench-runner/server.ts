@@ -18,6 +18,7 @@ import express from "express";
 import { spawn } from "node:child_process";
 
 import { getJob, startJob } from "../lib/core/job-queue.js";
+import { unknownParamsFor } from "./known-params.js";
 
 import { paramsFromQuery } from "../lib/core/params.js";
 import {
@@ -122,14 +123,30 @@ app.get("/health", (_req, res) =>
 // Wrap each handler in this so we get both modes for free. `?async=1`
 // switches the response to 202 {jobId} + background execution; without
 // it the endpoint behaves identically to before this change.
+//
+// The 202 body also echoes `effectiveParams` (what the handler actually
+// parsed) and `unknownParams` (query keys this endpoint would silently
+// ignore, per known-params.ts). Drivers verify both before letting a
+// paid run proceed: a key the runner ignores, or a value that fell back
+// to a default, means the test is about to measure the wrong thing.
 async function respondAsync<T>(
   req: express.Request,
   res: express.Response,
   run: () => Promise<T>,
+  effectiveParams?: Record<string, unknown>,
 ): Promise<void> {
+  const unknownParams = unknownParamsFor(
+    req.path,
+    req.query as Record<string, unknown>,
+  );
+  if (unknownParams.length > 0) {
+    console.warn(
+      `[params] ${req.path} ignoring unknown query params: ${unknownParams.join(", ")}`,
+    );
+  }
   if (req.query.async === "1") {
     const jobId = startJob(run);
-    res.status(202).json({ jobId });
+    res.status(202).json({ jobId, effectiveParams, unknownParams });
     return;
   }
   try {
@@ -176,8 +193,12 @@ app.post("/bench-jitter-anycable", async (req, res) => {
   // $pubsub channel over the extended protocol.
   const channel = (req.query.channel as string) || undefined;
   const acProtocol = (req.query.acProtocol as string) || undefined;
-  // `?reconnectBaseMs=200` makes the client's first reconnect fire in ~200ms
-  // (vs the multi-second @anycable/core default), shrinking the resume-tail p99.
+  // `?reconnectMode=tuned` applies the uniform aggressive reconnect profile to
+  // whichever client is in use (default = each client's stock backoff). Run both
+  // and report side by side: default = real UX, tuned = server resume ceiling.
+  const reconnectMode =
+    (req.query.reconnectMode as string) === "tuned" ? "tuned" : "default";
+  // `?reconnectBaseMs=200` sets the tuned profile's first-attempt base delay.
   const reconnectBaseMs = req.query.reconnectBaseMs
     ? parseInt(req.query.reconnectBaseMs as string, 10)
     : undefined;
@@ -185,16 +206,21 @@ app.post("/bench-jitter-anycable", async (req, res) => {
   // (for Action Cable / Solid Cable / Async::Cable); default @anycable/core.
   const clientLib =
     (req.query.clientLib as string) === "actioncable" ? "actioncable" : undefined;
-  await respondAsync(req, res, () =>
-    runJitterAnycable(params, {
-      cableUrl,
-      broadcastUrl,
-      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
-      channel,
-      acProtocol,
-      reconnectBaseMs,
-      clientLib,
-    }),
+  await respondAsync(
+    req,
+    res,
+    () =>
+      runJitterAnycable(params, {
+        cableUrl,
+        broadcastUrl,
+        broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+        channel,
+        acProtocol,
+        reconnectMode,
+        reconnectBaseMs,
+        clientLib,
+      }),
+    { ...params, cableUrl, channel, acProtocol, reconnectMode, reconnectBaseMs, clientLib },
   );
 });
 
@@ -262,8 +288,11 @@ app.post("/bench-jitter-anycable-traced", async (req, res) => {
 app.post("/bench-jitter-socketio", async (req, res) => {
   const params = paramsFromQuery(req);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-  await respondAsync(req, res, () =>
-    runJitterSocketio(params, { serverUrl }),
+  await respondAsync(
+    req,
+    res,
+    () => runJitterSocketio(params, { serverUrl }),
+    { ...params, serverUrl },
   );
 });
 
@@ -273,8 +302,11 @@ app.post("/bench-jitter-socketio", async (req, res) => {
 app.post("/bench-jitter-socketio-csr", async (req, res) => {
   const params = paramsFromQuery(req);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-  await respondAsync(req, res, () =>
-    runJitterSocketioCsr(params, { serverUrl }),
+  await respondAsync(
+    req,
+    res,
+    () => runJitterSocketioCsr(params, { serverUrl }),
+    { ...params, serverUrl },
   );
 });
 
@@ -285,8 +317,11 @@ app.post("/bench-jitter-uws", async (req, res) => {
   const params = paramsFromQuery(req);
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
   const httpUrl = (req.query.httpUrl as string) || UWS_HTTP_URL;
-  await respondAsync(req, res, () =>
-    runJitterUws(params, { serverWsUrl: wsUrl, serverHttpUrl: httpUrl }),
+  await respondAsync(
+    req,
+    res,
+    () => runJitterUws(params, { serverWsUrl: wsUrl, serverHttpUrl: httpUrl }),
+    { ...params, wsUrl, httpUrl },
   );
 });
 
@@ -307,8 +342,16 @@ app.post("/bench-idle-anycable", async (req, res) => {
   const channel = (req.query.channel as string) || undefined;
   const acProtocol = (req.query.acProtocol as string) || undefined;
 
-  await respondAsync(req, res, () =>
-    runIdleAnycable({ n, holdSec, rampPerSec, stream, channel, acProtocol }, cableUrl, shardLabel),
+  await respondAsync(
+    req,
+    res,
+    () =>
+      runIdleAnycable(
+        { n, holdSec, rampPerSec, stream, channel, acProtocol },
+        cableUrl,
+        shardLabel,
+      ),
+    { n, holdSec, rampPerSec, stream, cableUrl, channel, acProtocol },
   );
 });
 
@@ -327,8 +370,11 @@ app.post("/bench-idle-socketio", async (req, res) => {
   const shardLabel = (req.query.shard as string) || undefined;
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
 
-  await respondAsync(req, res, () =>
-    runIdleSocketio({ n, holdSec, rampPerSec, stream }, serverUrl, shardLabel),
+  await respondAsync(
+    req,
+    res,
+    () => runIdleSocketio({ n, holdSec, rampPerSec, stream }, serverUrl, shardLabel),
+    { n, holdSec, rampPerSec, stream, serverUrl },
   );
 });
 
@@ -342,8 +388,11 @@ app.post("/bench-idle-uws", async (req, res) => {
   const shardLabel = (req.query.shard as string) || undefined;
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
 
-  await respondAsync(req, res, () =>
-    runIdleUws({ n, holdSec, rampPerSec, stream }, wsUrl, shardLabel),
+  await respondAsync(
+    req,
+    res,
+    () => runIdleUws({ n, holdSec, rampPerSec, stream }, wsUrl, shardLabel),
+    { n, holdSec, rampPerSec, stream, wsUrl },
   );
 });
 
@@ -364,11 +413,15 @@ app.post("/bench-avalanche-socketio", async (req, res) => {
   const stream = (req.query.stream as string) || "avalanche";
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
 
-  await respondAsync(req, res, () =>
-    runAvalancheSocketio(
-      { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
-      serverUrl,
-    ),
+  await respondAsync(
+    req,
+    res,
+    () =>
+      runAvalancheSocketio(
+        { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+        serverUrl,
+      ),
+    { n, rampPerSec, prearmSec, recoveryWaitSec, stream, serverUrl },
   );
 });
 
@@ -389,11 +442,15 @@ app.post("/bench-avalanche-anycable", async (req, res) => {
   const clientLib =
     (req.query.clientLib as string) === "actioncable" ? "actioncable" : undefined;
 
-  await respondAsync(req, res, () =>
-    runAvalancheAnycable(
-      { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
-      { cableUrl, channel, acProtocol, clientLib },
-    ),
+  await respondAsync(
+    req,
+    res,
+    () =>
+      runAvalancheAnycable(
+        { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+        { cableUrl, channel, acProtocol, clientLib },
+      ),
+    { n, rampPerSec, prearmSec, recoveryWaitSec, stream, cableUrl, channel, acProtocol, clientLib },
   );
 });
 
@@ -540,22 +597,31 @@ function whispersParamsFromQuery(req: express.Request) {
 app.post("/bench-whispers-anycable", async (req, res) => {
   const params = whispersParamsFromQuery(req);
   const cableUrl = (req.query.cableUrl as string) || ANYCABLE_URL;
-  await respondAsync(req, res, () => runWhispersAnycable(params, cableUrl));
+  await respondAsync(req, res, () => runWhispersAnycable(params, cableUrl), {
+    ...params,
+    cableUrl,
+  });
 });
 
 app.post("/bench-whispers-socketio", async (req, res) => {
   const params = whispersParamsFromQuery(req);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-  await respondAsync(req, res, () => runWhispersSocketio(params, { serverUrl }));
+  await respondAsync(
+    req,
+    res,
+    () => runWhispersSocketio(params, { serverUrl }),
+    { ...params, serverUrl },
+  );
 });
 
 app.post("/bench-whispers-uws", async (req, res) => {
   const params = whispersParamsFromQuery(req);
   const serverWsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
 
-  await respondAsync(req, res, () =>
-    runWhispersUws(params, { serverWsUrl }),
-  );
+  await respondAsync(req, res, () => runWhispersUws(params, { serverWsUrl }), {
+    ...params,
+    wsUrl: serverWsUrl,
+  });
 });
 
 // uWebSockets.js avalanche — same shape and methodology as the Socket.io
@@ -572,11 +638,15 @@ app.post("/bench-avalanche-uws", async (req, res) => {
   const stream = (req.query.stream as string) || "avalanche-uws";
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
 
-  await respondAsync(req, res, () =>
-    runAvalancheUws(
-      { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
-      wsUrl,
-    ),
+  await respondAsync(
+    req,
+    res,
+    () =>
+      runAvalancheUws(
+        { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
+        wsUrl,
+      ),
+    { n, rampPerSec, prearmSec, recoveryWaitSec, stream, wsUrl },
   );
 });
 
@@ -614,32 +684,42 @@ app.post("/bench-throughput-anycable", async (req, res) => {
   // channel over the extended protocol.
   const channel = (req.query.channel as string) || undefined;
   const acProtocol = (req.query.acProtocol as string) || undefined;
-  await respondAsync(req, res, () =>
-    runThroughputAnycable(params, {
-      cableUrl,
-      broadcastUrl,
-      broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
-      natsUrl,
-      natsSubject,
-      channel,
-      acProtocol,
-    }),
+  await respondAsync(
+    req,
+    res,
+    () =>
+      runThroughputAnycable(params, {
+        cableUrl,
+        broadcastUrl,
+        broadcastSecret: ANYCABLE_BROADCAST_SECRET || undefined,
+        natsUrl,
+        natsSubject,
+        channel,
+        acProtocol,
+      }),
+    { ...params, cableUrl, channel, acProtocol },
   );
 });
 
 app.post("/bench-throughput-socketio", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-sio-${Date.now()}`);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-  await respondAsync(req, res, () =>
-    runThroughputSocketio(params, { serverUrl }),
+  await respondAsync(
+    req,
+    res,
+    () => runThroughputSocketio(params, { serverUrl }),
+    { ...params, serverUrl },
   );
 });
 
 app.post("/bench-throughput-socketio-csr", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-csr-${Date.now()}`);
   const serverUrl = (req.query.serverUrl as string) || SOCKETIO_URL;
-  await respondAsync(req, res, () =>
-    runThroughputSocketioCsr(params, { serverUrl }),
+  await respondAsync(
+    req,
+    res,
+    () => runThroughputSocketioCsr(params, { serverUrl }),
+    { ...params, serverUrl },
   );
 });
 
@@ -677,8 +757,11 @@ app.post("/bench-throughput-socketio-redis", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-redis-${Date.now()}`);
   const subscriberUrlA = (req.query.subscriberUrlA as string) || SOCKETIO_REDIS_URL_A;
   const subscriberUrlB = (req.query.subscriberUrlB as string) || SOCKETIO_REDIS_URL_B;
-  await respondAsync(req, res, () =>
-    runThroughputSocketioRedis(params, { subscriberUrlA, subscriberUrlB }),
+  await respondAsync(
+    req,
+    res,
+    () => runThroughputSocketioRedis(params, { subscriberUrlA, subscriberUrlB }),
+    { ...params, subscriberUrlA, subscriberUrlB },
   );
 });
 
@@ -686,11 +769,15 @@ app.post("/bench-throughput-uws", async (req, res) => {
   const params = throughputParamsFromQuery(req, `tp-uws-${Date.now()}`);
   const wsUrl = (req.query.wsUrl as string) || UWS_WS_URL;
   const httpUrl = (req.query.httpUrl as string) || UWS_HTTP_URL;
-  await respondAsync(req, res, () =>
-    runThroughputUws(params, {
-      serverWsUrl: wsUrl,
-      serverHttpUrl: httpUrl,
-    }),
+  await respondAsync(
+    req,
+    res,
+    () =>
+      runThroughputUws(params, {
+        serverWsUrl: wsUrl,
+        serverHttpUrl: httpUrl,
+      }),
+    { ...params, wsUrl, httpUrl },
   );
 });
 

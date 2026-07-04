@@ -23,6 +23,8 @@
     "bench:idle:multi": "tsx src/bench/idle-multi.ts",
     "bench:jitter:multi": "tsx src/bench/jitter-multi.ts",
     "bench:whispers:multi": "tsx src/bench/whispers-multi.ts",
+    "bench:preflight": "tsx src/bench/preflight.ts",
+    "bench:fleet": "tsx src/bench/preflight.ts status",
     "bench:rebaseline": "tsx src/bench/rebaseline.ts",
     "bench:rebaseline:history": "tsx src/bench/rebaseline-history.ts",
     "bench:throughput:multi": "tsx src/bench/throughput-multi.ts",

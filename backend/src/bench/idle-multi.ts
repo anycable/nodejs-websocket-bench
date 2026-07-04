@@ -5,142 +5,122 @@
 // they don't share the ~64K ephemeral-port ceiling that limits a single
 // container. Total connections = sum of per-shard counts.
 //
+// Runs through the async job protocol (enqueue + poll) like the other
+// multi drivers, so long ramps and holds never hit Railway's 5-minute
+// edge timeout, and the params echo verifies each shard parsed what we
+// sent before the run starts.
+//
 // After the shards finish, queries Railway metrics over the test window
-// and prints ASCII charts of memory + CPU on the anycable-go service plus
-// a CSV file (idle-multi-<timestamp>.csv) for offline plotting.
+// and prints ASCII charts of memory + CPU on the target service plus
+// a CSV file for offline plotting.
 //
 // Usage:
-//   SHARDS=https://bench-runner-1.up.railway.app,https://bench-runner-2.up.railway.app,... \
-//   PER_SHARD_N=25000 HOLD_SEC=120 RAMP_PER_SEC=200 \
-//   PROJECT_ID=<uuid> SERVICE_ID=<anycable-go-uuid> SERVICE_NAME=anycable-go \
+//   SHARDS=https://bench-runner-2.up.railway.app,... \
+//   PER_SHARD_N=10000 HOLD_SEC=120 RAMP_PER_SEC=200 \
+//   TARGET=anycable \                # or socketio | uws
+//   PROJECT_ID=<uuid> SERVICE_ID=<target-uuid> SERVICE_NAME=anycable-go \
 //     tsx src/bench/idle-multi.ts
 //
-// All metrics-related env vars are optional — if PROJECT_ID and SERVICE_ID
-// aren't set, the script skips the chart and only reports aggregate counts.
+// Metrics env vars are optional — without PROJECT_ID and SERVICE_ID the
+// script skips the chart and only reports aggregate counts.
+//
+// Publishing rule: a capacity number is only a server ceiling when the
+// failure is on the server side. Shards that all stop at the same count
+// below PER_SHARD_N hit the load generator's wall — the script flags this
+// and such a run must be re-run with more shards, never published.
 
 import { writeFileSync } from "fs";
-import { Agent, setGlobalDispatcher } from "undici";
 
 import type { IdleResult } from "../lib/idle-runner.js";
-import { benchRunnerFetch } from "../lib/core/bench-runner-client.js";
 import { fetchMetric, readRailwayToken } from "../lib/core/railway-api.js";
 import { chart } from "../lib/core/chart.js";
+import { parseShardUrls } from "../lib/core/multi-shard.js";
+import { checkShardHealth } from "../lib/core/multi-shard.js";
 import { resultPath } from "../lib/core/results-dir.js";
+import { runShards, type ShardSpec } from "../lib/core/shard-coordinator.js";
 import { percentile } from "../lib/core/stats.js";
 
-// Each shard responds only after its full ramp + hold completes — at
-// 50K-per-shard with a 120s hold, that's ~5 minutes per request. Bump
-// the default 5-min fetch headers timeout so the coordinator doesn't
-// give up before the shards finish.
-setGlobalDispatcher(
-  new Agent({ headersTimeout: 30 * 60 * 1000, bodyTimeout: 30 * 60 * 1000 })
-);
+const shardUrls = parseShardUrls();
 
-const shardCsv = process.env.SHARDS;
-if (!shardCsv) {
-  console.error("SHARDS env var is required (comma-separated bench-runner URLs)");
-  process.exit(1);
-}
-const shardUrls = shardCsv.split(",").map((s) => s.trim()).filter(Boolean);
-if (shardUrls.length === 0) {
-  console.error("SHARDS must contain at least one URL");
-  process.exit(1);
-}
-
-const perShardN = parseInt(process.env.PER_SHARD_N || "25000", 10);
+const perShardN = parseInt(process.env.PER_SHARD_N || "10000", 10);
 const holdSec = parseInt(process.env.HOLD_SEC || "120", 10);
 const rampPerSec = parseInt(process.env.RAMP_PER_SEC || "200", 10);
 const stream = process.env.STREAM || "idle-probe";
-// Optional override sent to each shard so the bench-runner targets a
-// different anycable-go service (e.g. anycable-go-pro for the Pro variant).
-const cableUrl = process.env.CABLE_URL;
-// For a real Rails channel: CHANNEL=BenchmarkChannel and the base protocol
-// AC_PROTOCOL=actioncable-v1-json (vanilla Action Cable / Solid Cable /
-// AsyncCable). Omitted for standalone anycable-go ($pubsub over ext-json).
-const channel = process.env.CHANNEL;
-const acProtocol = process.env.AC_PROTOCOL;
 
-// TARGET=socketio switches the test to /bench-idle-socketio (Node-based
-// Socket.io). TARGET=uws targets /bench-idle-uws (uWebSockets.js).
-// Defaults to anycable for backwards compatibility.
 const target = (process.env.TARGET || "anycable").toLowerCase();
 if (target !== "anycable" && target !== "socketio" && target !== "uws") {
   console.error(`TARGET must be "anycable", "socketio", or "uws" (got "${target}")`);
   process.exit(1);
 }
-// SERVER_URL overrides the Socket.io target (TARGET=socketio variant).
-const socketioServerUrl = process.env.SERVER_URL;
-// UWS_WS_URL overrides the uWS target (TARGET=uws variant).
-const uwsWsUrl = process.env.UWS_WS_URL;
+const endpoint =
+  target === "socketio"
+    ? "bench-idle-socketio"
+    : target === "uws"
+      ? "bench-idle-uws"
+      : "bench-idle-anycable";
+
+// Target overrides, same names as every other driver.
+const targetQuery: Record<string, string> = {};
+if (target === "anycable") {
+  if (process.env.CABLE_URL) targetQuery.cableUrl = process.env.CABLE_URL;
+  if (process.env.CHANNEL) targetQuery.channel = process.env.CHANNEL;
+  if (process.env.AC_PROTOCOL) targetQuery.acProtocol = process.env.AC_PROTOCOL;
+}
+if (target === "socketio" && process.env.SERVER_URL)
+  targetQuery.serverUrl = process.env.SERVER_URL;
+if (target === "uws" && process.env.UWS_WS_URL)
+  targetQuery.wsUrl = process.env.UWS_WS_URL;
 
 const totalTarget = perShardN * shardUrls.length;
 
 console.log(
-  `Idle multi-shard test: ${shardUrls.length} shards × ${perShardN} = ${totalTarget} connections`
+  `Idle multi-shard test: ${shardUrls.length} shards × ${perShardN} = ${totalTarget} connections`,
 );
-console.log(`Hold:   ${holdSec}s  Ramp: ${rampPerSec}/s per shard\n`);
-shardUrls.forEach((u, i) => console.log(`  shard-${i + 1}: ${u}`));
-console.log("");
+console.log(`Target: ${target}  Hold: ${holdSec}s  Ramp: ${rampPerSec}/s per shard\n`);
 
-// Per-shard hard timeout — bumps fetch's headers timeout, but also acts as
-// an absolute ceiling so one hung shard can't block the whole report.
-const SHARD_TIMEOUT_MS = parseInt(process.env.SHARD_TIMEOUT_MS || "600000", 10);
-
-async function runShard(url: string, label: string): Promise<IdleResult> {
-  const qs = new URLSearchParams({
-    n: String(perShardN),
-    hold: String(holdSec),
-    ramp: String(rampPerSec),
-    stream,
-    shard: label,
-  });
-  if (target === "anycable" && cableUrl) qs.set("cableUrl", cableUrl);
-  if (target === "anycable" && channel) qs.set("channel", channel);
-  if (target === "anycable" && acProtocol) qs.set("acProtocol", acProtocol);
-  if (target === "socketio" && socketioServerUrl) qs.set("serverUrl", socketioServerUrl);
-  if (target === "uws" && uwsWsUrl) qs.set("wsUrl", uwsWsUrl);
-  const endpoint =
-    target === "socketio"
-      ? "bench-idle-socketio"
-      : target === "uws"
-        ? "bench-idle-uws"
-        : "bench-idle-anycable";
-
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), SHARD_TIMEOUT_MS);
-  try {
-    const res = await benchRunnerFetch(`${url}/${endpoint}?${qs.toString()}`, {
-      method: "POST",
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      throw new Error(`${label} returned ${res.status} ${res.statusText}`);
-    }
-    const result = (await res.json()) as IdleResult;
-    // Stream this shard's outcome immediately so a later stall can't lose it.
-    console.log(
-      `  ✓ ${label}: connected=${result.connected} welcomed=${result.welcomed} subscribed=${result.subscribed} failed=${result.failed} ramp=${(result.rampElapsedMs / 1000).toFixed(1)}s`
-    );
-    return result;
-  } catch (err) {
-    console.log(
-      `  ✗ ${label}: ${err instanceof Error ? err.message : String(err)}`
-    );
-    throw err;
-  } finally {
-    clearTimeout(t);
-  }
+console.log(`Health sweep: ${shardUrls.length} shard(s)...`);
+const health = await checkShardHealth(shardUrls);
+const bad = health.filter((h) => !h.ok);
+for (const h of bad) console.error(`  ✗ ${h.url}: ${h.detail}`);
+if (bad.length > 0) {
+  console.error(
+    `${bad.length}/${shardUrls.length} shard(s) unhealthy. Fix or drop them from SHARDS before burning a run.`,
+  );
+  process.exit(1);
 }
+console.log(`  ✓ all ${shardUrls.length} shards healthy\n`);
+
+// Ramp + hold bounds the wall clock; pad generously for connection retries.
+const shardTimeoutMs = parseInt(
+  process.env.SHARD_TIMEOUT_MS ||
+    String((Math.ceil(perShardN / rampPerSec) + holdSec + 300) * 1000),
+  10,
+);
+
+const specs: ShardSpec[] = shardUrls.map((url, i) => ({
+  url,
+  label: `shard-${i + 1}`,
+  endpoint,
+  query: {
+    n: perShardN,
+    hold: holdSec,
+    ramp: rampPerSec,
+    stream,
+    shard: `shard-${i + 1}`,
+    ...targetQuery,
+  },
+}));
 
 const startedAt = new Date();
 const startedAtIso = startedAt.toISOString();
 console.log(`Test started at ${startedAtIso}\n`);
 
-// Use allSettled: a single shard's HTTP failure (502, network glitch, etc.)
-// shouldn't lose the other shards' results. We report partial-success and
-// keep going so the metrics chart still has data.
-const shardPromises = shardUrls.map((u, i) => runShard(u, `shard-${i + 1}`));
-const settled = await Promise.allSettled(shardPromises);
+const outcomes = await runShards<IdleResult>(specs, {
+  pollIntervalMs: 5000,
+  pollLogLines: 10,
+  printProgress: true,
+  shardTimeoutMs,
+});
 
 const endedAt = new Date();
 const endedAtIso = endedAt.toISOString();
@@ -149,11 +129,11 @@ const endedAtIso = endedAt.toISOString();
 // Aggregate
 
 const results: IdleResult[] = [];
-const errors: { idx: number; reason: string }[] = [];
-settled.forEach((s, i) => {
-  if (s.status === "fulfilled") results.push(s.value);
-  else errors.push({ idx: i + 1, reason: String(s.reason).slice(0, 200) });
-});
+const errors: { label: string; reason: string }[] = [];
+for (const o of outcomes) {
+  if (o.status === "done" && o.result) results.push(o.result);
+  else errors.push({ label: o.spec.label, reason: (o.error || "unknown").slice(0, 200) });
+}
 
 const totals = results.reduce(
   (acc, r) => ({
@@ -162,13 +142,12 @@ const totals = results.reduce(
     subscribed: acc.subscribed + r.subscribed,
     failed: acc.failed + r.failed,
   }),
-  { connected: 0, welcomed: 0, subscribed: 0, failed: 0 }
+  { connected: 0, welcomed: 0, subscribed: 0, failed: 0 },
 );
 
-// Per-shard outcomes were already streamed via runShard; no need to repeat.
 if (errors.length > 0) {
   console.log(
-    `\n${errors.length} shard(s) errored or timed out — totals below cover the ${results.length} surviving shard(s).`
+    `\n${errors.length} shard(s) errored or timed out — totals below cover the ${results.length} surviving shard(s).`,
   );
 }
 
@@ -179,6 +158,25 @@ console.log(`  Subscribed:   ${totals.subscribed.toLocaleString()}`);
 console.log(`  Failed:       ${totals.failed.toLocaleString()}`);
 console.log(`  Test window:  ${startedAtIso} → ${endedAtIso}`);
 
+// Validity: the uniform-shard-ceiling signature. Every shard freezing at
+// the same count below PER_SHARD_N is the load generator's ephemeral-port
+// or event-loop wall (the "exactly 12,002 per shard" bug class), never a
+// server ceiling. Name the stop condition or re-run with more shards.
+let generatorLimited = false;
+if (results.length >= 2) {
+  const connected = results.map((r) => r.connected);
+  const allEqual = connected.every((c) => Math.abs(c - connected[0]) <= 5);
+  if (allEqual && connected[0] < perShardN * 0.99) {
+    generatorLimited = true;
+    console.log(
+      `\n[FATAL] uniform-shard-ceiling: every shard stopped at ~${connected[0]} of ${perShardN} requested.`,
+    );
+    console.log(
+      `  This is the load generator's wall, not the server's. Add shards or lower PER_SHARD_N; do not publish this as a capacity number.`,
+    );
+  }
+}
+
 // -------------------------------------------------------------------------
 // Optional: Railway metrics + chart
 
@@ -188,9 +186,9 @@ const serviceName = process.env.SERVICE_NAME || "anycable-go";
 
 if (!projectId || !serviceId) {
   console.log(
-    "\n(set PROJECT_ID and SERVICE_ID to chart memory/CPU on anycable-go)"
+    "\n(set PROJECT_ID and SERVICE_ID to chart memory/CPU on the target)",
   );
-  process.exit(0);
+  process.exit(generatorLimited ? 2 : 0);
 }
 
 const token = readRailwayToken();
@@ -201,7 +199,7 @@ const windowStart = new Date(startedAt.getTime() - padMs).toISOString();
 const windowEnd = new Date(endedAt.getTime() + padMs).toISOString();
 
 console.log(
-  `\nFetching Railway metrics for ${serviceName} over [${windowStart}, ${windowEnd}]...`
+  `\nFetching Railway metrics for ${serviceName} over [${windowStart}, ${windowEnd}]...`,
 );
 
 const [memPoints, cpuPoints] = await Promise.all([
@@ -225,7 +223,7 @@ const [memPoints, cpuPoints] = await Promise.all([
 
 if (memPoints.length === 0 && cpuPoints.length === 0) {
   console.log("(no metrics returned — wrong service id, or window too short?)");
-  process.exit(0);
+  process.exit(generatorLimited ? 2 : 0);
 }
 
 // Convert to seconds-since-test-start.
@@ -234,7 +232,7 @@ const memSeries = memPoints.map((p) => ({ tSec: p.ts - startUnix, value: p.value
 const cpuSeries = cpuPoints.map((p) => ({ tSec: p.ts - startUnix, value: p.value }));
 
 console.log(
-  `\n=== ${serviceName} during the test ===  (n=${memPoints.length} samples)\n`
+  `\n=== ${serviceName} during the test ===  (n=${memPoints.length} samples)\n`,
 );
 
 console.log(chart({ title: `Memory`, points: memSeries, height: 12, width: 60, yUnit: "MB" }));
@@ -246,6 +244,15 @@ const cpuValues = cpuSeries.map((p) => p.value).sort((a, b) => a - b);
 
 console.log(`\nMemory: peak=${percentile(memValues, 100).toFixed(0)} MB  p95=${percentile(memValues, 95).toFixed(0)} MB  avg=${(memValues.reduce((s, n) => s + n, 0) / Math.max(1, memValues.length)).toFixed(0)} MB`);
 console.log(`CPU:    peak=${percentile(cpuValues, 100).toFixed(2)} %   p95=${percentile(cpuValues, 95).toFixed(2)} %   avg=${(cpuValues.reduce((s, n) => s + n, 0) / Math.max(1, cpuValues.length)).toFixed(2)} %`);
+
+// RAM per connection while held: the metric that stays valid even when the
+// fleet caps below the target scale (matched-scale efficiency).
+if (totals.connected > 0 && memValues.length > 0) {
+  const peakMb = percentile(memValues, 100);
+  console.log(
+    `RAM/conn (peak):   ${((peakMb * 1024) / totals.connected).toFixed(1)} KB across ${totals.connected.toLocaleString()} connections`,
+  );
+}
 
 // CSV: tSec, mem_mb, cpu_pct (joined on closest sample timestamp).
 const csvPath = resultPath(`idle-multi-${startedAt.toISOString().replace(/[:.]/g, "-")}.csv`);
@@ -260,3 +267,5 @@ for (const t of allTs) {
 }
 writeFileSync(csvPath, lines.join("\n") + "\n");
 console.log(`\nWrote time-series CSV: ${csvPath}`);
+
+process.exit(generatorLimited ? 2 : 0);

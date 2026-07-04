@@ -30,6 +30,12 @@ import { tests, type TestSpec } from "./tests-manifest.js";
 import { runShards, type ShardSpec } from "../lib/core/shard-coordinator.js";
 import { fetchMetric, readRailwayToken } from "../lib/core/railway-api.js";
 import { benchRunnerFetch } from "../lib/core/bench-runner-client.js";
+import { mergeJitterResults, type JitterResult } from "../lib/core/stats.js";
+import {
+  formatValidityReport,
+  validateResult,
+  validateShardSet,
+} from "../lib/core/validity.js";
 
 // Railway project that hosts the bench targets. Hardcoded because it's
 // stable across runs; can override with PROJECT_ID for a different env.
@@ -333,6 +339,74 @@ async function runMultiShard(spec: TestSpec): Promise<IdleLikeResult> {
 }
 
 // Wraps runMultiShard to also fetch + attach Railway metrics for the target.
+// Fan a jitter/latency test across `spec.numShards` replicas and merge the
+// JitterResults properly: union percentiles from per-shard downsampled
+// samples (mergeJitterResults), never per-shard averages. Runs the validity
+// checks so a run that measured the rig flags itself in the report.
+async function runMultiJitter(spec: TestSpec): Promise<JitterResult> {
+  if (!spec.numShards || !spec.perShardN) {
+    throw new Error(`${spec.id}: multi-jitter mode needs numShards + perShardN`);
+  }
+  if (benchRunnerUrls.length < spec.numShards) {
+    throw new Error(
+      `${spec.id}: needs ${spec.numShards} shards but BENCH_RUNNER_URLS only has ${benchRunnerUrls.length}`,
+    );
+  }
+  const runStamp = Date.now();
+  const shards: ShardSpec[] = benchRunnerUrls
+    .slice(0, spec.numShards)
+    .map((url, i) => ({
+      url,
+      label: `s${i + 1}`,
+      endpoint: spec.endpoint,
+      query: {
+        ...Object.fromEntries(
+          Object.entries(spec.params).map(([k, v]) => [k, String(v)]),
+        ),
+        // After the params spread so a spec's n/stream can never override
+        // the sharding: per-shard N, merge-ready samples, unique stream so
+        // each shard's publisher fans out only to its own subscribers.
+        n: spec.perShardN!,
+        samplesCap: Number(spec.params.samplesCap ?? 5000),
+        stream: `${spec.id}-${runStamp}-s${i + 1}`,
+      },
+    }));
+
+  const outcomes = await runShards<JitterResult>(shards, {
+    pollIntervalMs: 10_000,
+    printProgress: false,
+    shardTimeoutMs: 15 * 60 * 1000,
+  });
+
+  const successes = outcomes
+    .filter((o) => o.status === "done" && o.result)
+    .map((o) => o.result!) as JitterResult[];
+  const failed = outcomes.length - successes.length;
+  if (failed > 0) {
+    console.log(
+      `      ${c.yellow}${failed} of ${outcomes.length} shard(s) failed; merge covers the rest — treat as a partial run${c.reset}`,
+    );
+  }
+  if (successes.length === 0) {
+    throw new Error(`${spec.id}: all ${outcomes.length} shards failed`);
+  }
+
+  const merged = mergeJitterResults(spec.id, successes);
+
+  const durationSec = Number(spec.params.duration);
+  const flags = [
+    ...validateShardSet(successes, { perShardN: spec.perShardN }),
+    ...validateResult(merged, {
+      perShardN: spec.perShardN,
+      expectedDurationSec: Number.isFinite(durationSec) ? durationSec : undefined,
+    }),
+  ];
+  if (flags.length > 0) {
+    console.log(formatValidityReport(flags));
+  }
+  return merged;
+}
+
 async function runMultiShardWithMetrics(
   spec: TestSpec,
 ): Promise<IdleLikeResult> {
@@ -471,6 +545,9 @@ async function runAvalancheWithRedeploy(
 async function runTest(spec: TestSpec, baseUrl: string): Promise<unknown> {
   if (spec.mode === "multi-shard") {
     return runMultiShardWithMetrics(spec);
+  }
+  if (spec.mode === "multi-jitter") {
+    return runMultiJitter(spec);
   }
   if (spec.mode === "avalanche") {
     return runAvalancheWithRedeploy(spec, baseUrl);
