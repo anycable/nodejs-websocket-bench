@@ -14,6 +14,8 @@ import { createCable } from "@anycable/core";
 import {
   anycableDefaultStrategy,
   makeTunedStrategy,
+  makeResumeAwareStrategy,
+  NATIVE_TUNED_STALE_FLOOR_SEC,
   type ReconnectMode,
 } from "./core/reconnect-strategies.js";
 // The official Rails client (for the Action Cable / Solid Cable / Async::Cable
@@ -182,15 +184,23 @@ export async function runJitterAnycable(
   if (useActionCable) {
     // @rails/actioncable reconnect timing lives on the ConnectionMonitor's
     // static `staleThreshold` (seconds). It's a global in this long-lived
-    // process, so set it explicitly per run: tuned → fast (~tunedBaseMs), else
-    // restore the native 6 s default. reconnectionBackoffRate stays at Rails'
-    // 0.15 so only the base changes.
+    // process, so set it explicitly per run: tuned → aggressive, else restore
+    // the native 6 s default. reconnectionBackoffRate stays at Rails' 0.15 so
+    // only the base changes.
+    //
+    // The tuned threshold is FLOORED at NATIVE_TUNED_STALE_FLOOR_SEC: the native
+    // client can't detect a drop faster than ~the ping interval, and a threshold
+    // below it reconnects a healthy connection in a loop (a rig artifact). So the
+    // native client's tuned reconnect floors near the ping interval while
+    // @anycable/core (real backoff) can tune much lower — an honest asymmetry.
     const CM = (ActionCable as unknown as {
       ConnectionMonitor: { staleThreshold: number; reconnectionBackoffRate: number };
     }).ConnectionMonitor;
-    CM.staleThreshold = tuned ? tunedBaseMs / 1000 : 6;
+    CM.staleThreshold = tuned
+      ? Math.max(tunedBaseMs / 1000, NATIVE_TUNED_STALE_FLOOR_SEC)
+      : 6;
     CM.reconnectionBackoffRate = 0.15;
-    log.info(`[jitter-ac] actioncable reconnect: staleThreshold=${CM.staleThreshold}s (${tuned ? "tuned" : "default"})`);
+    log.info(`[jitter-ac] actioncable reconnect: staleThreshold=${CM.staleThreshold}s (${tuned ? "tuned, floored at ping interval" : "default"})`);
   } else {
     log.info(`[jitter-ac] anycable reconnect: ${tuned ? `tuned base=${tunedBaseMs}ms` : "default backoffWithJitter(3000)"}`);
   }
@@ -236,19 +246,31 @@ export async function runJitterAnycable(
         destroy: () => consumer.disconnect(),
       });
     } else {
+      // resume-aware needs the cable reference at strategy-call time to read
+      // cable.recovering; the cable doesn't exist yet, so close over a ref we
+      // fill right after createCable.
+      let cableRef: ReturnType<typeof createCable> | undefined;
+      const reconnectStrategy =
+        urls.reconnectMode === "resume-aware"
+          ? makeResumeAwareStrategy(
+              () => cableRef as unknown as { recovering?: boolean } | undefined,
+              { resumeBaseMs: urls.reconnectBaseMs && urls.reconnectBaseMs > 0 ? urls.reconnectBaseMs : 250 },
+            )
+          : tuned
+            ? makeTunedStrategy(tunedBaseMs)
+            : anycableDefaultStrategy;
       const cable = createCable(urls.cableUrl, {
         websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
         protocol: (urls.acProtocol ?? "actioncable-v1-ext-json") as never,
         // The @anycable/core types don't include "error" yet; the runtime
         // accepts any of error|warn|info|debug.
         logLevel: "error" as never,
-        // Explicit named strategy (per PR review — no inline backoffWithJitter
-        // tweak): tuned → shared aggressive profile; default → @anycable/core's
-        // real stock backoff.
-        reconnectStrategy: tuned
-          ? makeTunedStrategy(tunedBaseMs)
-          : anycableDefaultStrategy,
+        // Explicit named strategy: default → @anycable/core's stock backoff;
+        // tuned → shared aggressive profile; resume-aware → aggressive on
+        // resume (cheap, Go-only), conservative on fresh connect (hits Rails).
+        reconnectStrategy,
       });
+      cableRef = cable;
       cable.on("close", () => {});
       cable.on("disconnect", () => {});
       cable.on("connect", () => {

@@ -17,6 +17,12 @@
 
 import WebSocket from "ws";
 import { createCable } from "@anycable/core";
+import {
+  anycableDefaultStrategy,
+  makeTunedStrategy,
+  makeResumeAwareStrategy,
+  type ReconnectMode,
+} from "./core/reconnect-strategies.js";
 
 import { percentile } from "./core/stats.js";
 import { settleAfterRamp } from "./core/timing.js";
@@ -31,6 +37,13 @@ export interface AvalancheAnycableUrls {
   // reconnect, base protocol) for Action Cable / Solid Cable / Async::Cable;
   // default @anycable/core for AnyCable.
   clientLib?: "anycable" | "actioncable";
+  // Client reconnect backoff (@anycable/core only). default = stock; tuned =
+  // uniform aggressive; resume-aware = aggressive on resume (Go-only), conservative
+  // on fresh connect (RPC to Rails). The gateway-redeploy test compares these:
+  // a gateway restart wipes sessions, so all clients fresh-connect, and this is
+  // where tuned storms the Rails backend while resume-aware bounds it.
+  reconnectMode?: ReconnectMode;
+  reconnectBaseMs?: number;
 }
 
 export async function runAvalancheAnycable(
@@ -116,11 +129,24 @@ export async function runAvalancheAnycable(
       );
       conns.push({ disconnect: () => consumer.disconnect() });
     } else {
+      let cableRef: ReturnType<typeof createCable> | undefined;
+      const resumeBaseMs = urls.reconnectBaseMs && urls.reconnectBaseMs > 0 ? urls.reconnectBaseMs : 250;
+      const reconnectStrategy =
+        urls.reconnectMode === "resume-aware"
+          ? makeResumeAwareStrategy(
+              () => cableRef as unknown as { recovering?: boolean } | undefined,
+              { resumeBaseMs },
+            )
+          : urls.reconnectMode === "tuned"
+            ? makeTunedStrategy(urls.reconnectBaseMs && urls.reconnectBaseMs > 0 ? urls.reconnectBaseMs : 500)
+            : anycableDefaultStrategy;
       const cable = createCable(urls.cableUrl, {
         websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
         protocol: protocol as never,
         logLevel: "error" as never,
+        reconnectStrategy,
       });
+      cableRef = cable;
       // Both "disconnect" and "close" can fire for a single drop; handleDown is
       // idempotent per connection, so the drop is counted once.
       cable.on("connect", () => handleUp(i));

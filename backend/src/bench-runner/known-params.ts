@@ -97,6 +97,8 @@ const KNOWN: Record<string, string[]> = {
     "channel",
     "acProtocol",
     "clientLib",
+    "reconnectMode",
+    "reconnectBaseMs",
   ],
   "/bench-avalanche-uws": [...AVALANCHE, "wsUrl"],
   "/bench-deploy-impact-socketio": [

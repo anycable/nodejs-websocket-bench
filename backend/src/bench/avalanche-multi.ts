@@ -57,6 +57,11 @@ const protocol = (
 const channel = process.env.CHANNEL;
 const acProtocol = process.env.AC_PROTOCOL;
 const cableUrl = process.env.CABLE_URL;
+// Client reconnect backoff for the gateway-redeploy test (default | tuned |
+// resume-aware). On a gateway restart every client fresh-connects (RPC to
+// Rails); tuned storms the backend, resume-aware bounds it.
+const reconnectMode = process.env.RECONNECT_MODE;
+const reconnectBaseMs = process.env.RECONNECT_BASE_MS;
 
 const scales = (process.env.SCALES || "1000,2500,5000,10000,20000")
   .split(",")
@@ -121,6 +126,8 @@ async function runOneScale(n: number): Promise<ScaleRow | null> {
   if (channel) qs.set("channel", channel);
   if (acProtocol) qs.set("acProtocol", acProtocol);
   if (cableUrl) qs.set("cableUrl", cableUrl);
+  if (reconnectMode) qs.set("reconnectMode", reconnectMode);
+  if (reconnectBaseMs) qs.set("reconnectBaseMs", reconnectBaseMs);
 
   const startedAt = Date.now();
   const responsePromise = benchRunnerFetch(

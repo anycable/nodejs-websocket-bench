@@ -193,11 +193,14 @@ app.post("/bench-jitter-anycable", async (req, res) => {
   // $pubsub channel over the extended protocol.
   const channel = (req.query.channel as string) || undefined;
   const acProtocol = (req.query.acProtocol as string) || undefined;
-  // `?reconnectMode=tuned` applies the uniform aggressive reconnect profile to
-  // whichever client is in use (default = each client's stock backoff). Run both
-  // and report side by side: default = real UX, tuned = server resume ceiling.
-  const reconnectMode =
-    (req.query.reconnectMode as string) === "tuned" ? "tuned" : "default";
+  // `?reconnectMode=` selects the client reconnect backoff:
+  //   default      = each client's stock backoff (real UX);
+  //   tuned        = uniform aggressive profile (server resume ceiling);
+  //   resume-aware = @anycable/core only: aggressive on resume (Go-only, cheap),
+  //                  conservative on fresh connect (RPC to Rails).
+  const rmRaw = (req.query.reconnectMode as string) || "";
+  const reconnectMode: "default" | "tuned" | "resume-aware" =
+    rmRaw === "tuned" || rmRaw === "resume-aware" ? rmRaw : "default";
   // `?reconnectBaseMs=200` sets the tuned profile's first-attempt base delay.
   const reconnectBaseMs = req.query.reconnectBaseMs
     ? parseInt(req.query.reconnectBaseMs as string, 10)
@@ -441,6 +444,12 @@ app.post("/bench-avalanche-anycable", async (req, res) => {
   const acProtocol = (req.query.acProtocol as string) || undefined;
   const clientLib =
     (req.query.clientLib as string) === "actioncable" ? "actioncable" : undefined;
+  const avRmRaw = (req.query.reconnectMode as string) || "";
+  const reconnectMode: "default" | "tuned" | "resume-aware" =
+    avRmRaw === "tuned" || avRmRaw === "resume-aware" ? avRmRaw : "default";
+  const reconnectBaseMs = req.query.reconnectBaseMs
+    ? parseInt(req.query.reconnectBaseMs as string, 10)
+    : undefined;
 
   await respondAsync(
     req,
@@ -448,9 +457,9 @@ app.post("/bench-avalanche-anycable", async (req, res) => {
     () =>
       runAvalancheAnycable(
         { n, rampPerSec, prearmSec, recoveryWaitSec, stream },
-        { cableUrl, channel, acProtocol, clientLib },
+        { cableUrl, channel, acProtocol, clientLib, reconnectMode, reconnectBaseMs },
       ),
-    { n, rampPerSec, prearmSec, recoveryWaitSec, stream, cableUrl, channel, acProtocol, clientLib },
+    { n, rampPerSec, prearmSec, recoveryWaitSec, stream, cableUrl, channel, acProtocol, clientLib, reconnectMode, reconnectBaseMs },
   );
 });
 
