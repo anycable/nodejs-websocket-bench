@@ -11,6 +11,16 @@
 
 import WebSocket from "ws";
 import { createCable } from "@anycable/core";
+import {
+  anycableDefaultStrategy,
+  makeTunedStrategy,
+  makeResumeAwareStrategy,
+  NATIVE_TUNED_STALE_FLOOR_SEC,
+  type ReconnectMode,
+} from "./core/reconnect-strategies.js";
+// The official Rails client (for the Action Cable / Solid Cable / Async::Cable
+// targets), set up to run under Node. AnyCable keeps @anycable/core.
+import { ActionCable } from "./core/actioncable-node.js";
 import { io as ioClient, Socket } from "socket.io-client";
 
 import { ClientStat, JitterResult, newStat, recordMsg, summarize } from "./core/stats.js";
@@ -117,6 +127,32 @@ export interface AnycableUrls {
   cableUrl: string;
   broadcastUrl: string;
   broadcastSecret?: string;
+  // Channel to subscribe to. Defaults to "$pubsub" (anycable-go's public
+  // pub/sub channel, used by the standalone OSS/Pro targets via streamFrom).
+  // For a real Rails app, pass "BenchmarkChannel" and the driver subscribes
+  // to that named channel with { stream_name } params instead.
+  channel?: string;
+  // WebSocket subprotocol. AnyCable uses the extended Action Cable protocol
+  // ("actioncable-v1-ext-json") which carries the delivery-guarantee /
+  // resume machinery; vanilla Action Cable and Solid Cable speak the base
+  // protocol ("actioncable-v1-json").
+  acProtocol?: string;
+  // Reconnect mode for the client's backoff:
+  //   "default" (default) — each client's stock reconnect (what users get):
+  //       @anycable/core → backoffWithJitter(3000) (~1.5–9s first reconnect);
+  //       @rails/actioncable → its ConnectionMonitor (~6s first reconnect).
+  //   "tuned" — a uniform aggressive-but-storm-safe backoff (~reconnectBaseMs
+  //       first attempt) on BOTH clients, so the resume tail reflects the
+  //       SERVER's replay speed rather than the client's stock delay.
+  // Run both and report side by side (default = real UX, tuned = server ceiling).
+  reconnectMode?: ReconnectMode;
+  // First-attempt base delay (ms) for the tuned profile. Default 500.
+  reconnectBaseMs?: number;
+  // Which JS client to drive with. "anycable" (default) = @anycable/core
+  // (extended protocol, resume) for the AnyCable target. "actioncable" =
+  // @rails/actioncable (the official Rails client, base protocol, no resume)
+  // for the Action Cable / Solid Cable / Async::Cable targets.
+  clientLib?: "anycable" | "actioncable";
 }
 
 export async function runJitterAnycable(
@@ -129,27 +165,140 @@ export async function runJitterAnycable(
   const rss = trackPeakRss();
 
   const stats: ClientStat[] = [];
-  const cables: ReturnType<typeof createCable>[] = [];
+  // Unified control surface over the two client libraries so the jitter loop
+  // and teardown stay client-agnostic. disconnect()/connect() take the client
+  // cleanly offline and back — a standard fixed-length outage regardless of
+  // the client's own backoff. destroy() fully tears the client down at the end
+  // of the run (stops the reconnect monitor too), so no consumer keeps
+  // reconnecting inside the long-lived bench-runner process.
+  interface JitterConn {
+    disconnect(): void;
+    connect(): void;
+    destroy(): void;
+  }
+  const conns: JitterConn[] = [];
+  const useActionCable = urls.clientLib === "actioncable";
+  const tuned = urls.reconnectMode === "tuned";
+  const tunedBaseMs = urls.reconnectBaseMs && urls.reconnectBaseMs > 0 ? urls.reconnectBaseMs : 500;
+
+  if (useActionCable) {
+    // @rails/actioncable reconnect timing lives on the ConnectionMonitor's
+    // static `staleThreshold` (seconds). It's a global in this long-lived
+    // process, so set it explicitly per run: tuned → aggressive, else restore
+    // the native 6 s default. reconnectionBackoffRate stays at Rails' 0.15 so
+    // only the base changes.
+    //
+    // The tuned threshold is FLOORED at NATIVE_TUNED_STALE_FLOOR_SEC: the native
+    // client can't detect a drop faster than ~the ping interval, and a threshold
+    // below it reconnects a healthy connection in a loop (a rig artifact). So the
+    // native client's tuned reconnect floors near the ping interval while
+    // @anycable/core (real backoff) can tune much lower — an honest asymmetry.
+    const CM = (ActionCable as unknown as {
+      ConnectionMonitor: { staleThreshold: number; reconnectionBackoffRate: number };
+    }).ConnectionMonitor;
+    CM.staleThreshold = tuned
+      ? Math.max(tunedBaseMs / 1000, NATIVE_TUNED_STALE_FLOOR_SEC)
+      : 6;
+    CM.reconnectionBackoffRate = 0.15;
+    log.info(`[jitter-ac] actioncable reconnect: staleThreshold=${CM.staleThreshold}s (${tuned ? "tuned, floored at ping interval" : "default"})`);
+  } else {
+    log.info(`[jitter-ac] anycable reconnect: ${tuned ? `tuned base=${tunedBaseMs}ms` : "default backoffWithJitter(3000)"}`);
+  }
 
   for (let i = 0; i < p.n; i++) {
     const stat = newStat();
     stats.push(stat);
 
-    const cable = createCable(urls.cableUrl, {
-      websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
-      protocol: "actioncable-v1-ext-json",
-      // The @anycable/core types don't include "error" yet; the runtime
-      // accepts any of error|warn|info|debug.
-      logLevel: "error" as never,
-    });
-    cable.on("close", () => {});
-    cable.on("disconnect", () => {});
-    cable.on("connect", () => {
-      stat.everConnected = true;
-    });
-    const channel = cable.streamFrom(p.stream);
-    channel.on("message", (msg: unknown) => recordMsg(stat, msg));
-    cables.push(cable);
+    if (useActionCable) {
+      // Official Rails client. createConsumer connects lazily; the
+      // subscription re-establishes on reconnect (no resume, base protocol).
+      const consumer = ActionCable.createConsumer(urls.cableUrl);
+      consumer.subscriptions.create(
+        { channel: urls.channel ?? "BenchmarkChannel", stream_name: p.stream },
+        {
+          connected() {
+            stat.everConnected = true;
+          },
+          received(data: unknown) {
+            recordMsg(stat, data);
+          },
+        }
+      );
+      conns.push({
+        // Drop the underlying socket uncleanly (like a network blip) but leave
+        // the ConnectionMonitor running, so the official Rails client recovers
+        // on its OWN native, poll-based schedule (seconds) rather than an
+        // immediate reconnect. This is what a real Action Cable app experiences.
+        disconnect: () => {
+          const conn = (
+            consumer as unknown as {
+              connection?: { webSocket?: { close?: () => void } };
+            }
+          ).connection;
+          conn?.webSocket?.close?.();
+        },
+        // No-op: the native monitor drives reconnection.
+        connect: () => {},
+        // Full teardown: consumer.disconnect() also stops the ConnectionMonitor,
+        // so it does not keep reconnecting after the run (a bare socket close
+        // would leave the monitor polling and orphan a live consumer in the
+        // long-lived bench-runner process).
+        destroy: () => consumer.disconnect(),
+      });
+    } else {
+      // resume-aware needs the cable reference at strategy-call time to read
+      // cable.recovering; the cable doesn't exist yet, so close over a ref we
+      // fill right after createCable.
+      let cableRef: ReturnType<typeof createCable> | undefined;
+      const reconnectStrategy =
+        urls.reconnectMode === "resume-aware"
+          ? makeResumeAwareStrategy(
+              () => cableRef as unknown as { recovering?: boolean } | undefined,
+              { resumeBaseMs: urls.reconnectBaseMs && urls.reconnectBaseMs > 0 ? urls.reconnectBaseMs : 250 },
+            )
+          : tuned
+            ? makeTunedStrategy(tunedBaseMs)
+            : anycableDefaultStrategy;
+      const cable = createCable(urls.cableUrl, {
+        websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
+        protocol: (urls.acProtocol ?? "actioncable-v1-ext-json") as never,
+        // The @anycable/core types don't include "error" yet; the runtime
+        // accepts any of error|warn|info|debug.
+        logLevel: "error" as never,
+        // Explicit named strategy: default → @anycable/core's stock backoff;
+        // tuned → shared aggressive profile; resume-aware → aggressive on
+        // resume (cheap, Go-only), conservative on fresh connect (hits Rails).
+        reconnectStrategy,
+      });
+      cableRef = cable;
+      cable.on("close", () => {});
+      cable.on("disconnect", () => {});
+      cable.on("connect", () => {
+        stat.everConnected = true;
+      });
+      // "$pubsub" -> anycable-go's signed pub/sub channel (streamFrom). Any
+      // other value -> a real Rails channel subscribed with { stream_name }.
+      const channel =
+        urls.channel && urls.channel !== "$pubsub"
+          ? cable.subscribeTo(urls.channel, { stream_name: p.stream })
+          : cable.streamFrom(p.stream);
+      channel.on("message", (msg: unknown) => recordMsg(stat, msg));
+      conns.push({
+        // Unclean socket drop (terminate the underlying ws) so @anycable/core's
+        // Monitor sees an unexpected close and auto-reconnects on its OWN
+        // reconnectStrategy — the default backoff or the tuned profile. This is
+        // what makes the default-vs-tuned matrix real: a manual connect() would
+        // reconnect immediately and bypass the strategy entirely (default would
+        // read the same as tuned). connect() is a no-op; the Monitor drives
+        // recovery and AnyCable resumes missed messages (sid retained) once back.
+        disconnect: () => {
+          terminateCableWs(cable);
+        },
+        connect: () => {},
+        // @anycable/core's disconnect() stops its Monitor cleanly at teardown.
+        destroy: () => cable.disconnect(),
+      });
+    }
 
     await maybePauseForRamp(p, i, "jitter-ac");
   }
@@ -166,28 +315,29 @@ export async function runJitterAnycable(
   });
 
   const endAt = Date.now() + p.durationSec * 1000;
-  const jitterTasks = cables.map((cable, i) =>
+  const jitterTasks = conns.map((conn, i) =>
     (async () => {
       const stat = stats[i];
       let next = Date.now() + (5 + Math.random() * p.jitterIntervalSec) * 1000;
       while (Date.now() < endAt) {
         if (Date.now() >= next) {
-          // Force-close the underlying TCP socket — same semantics as
-          // the Socket.io test (raw.terminate()). The cable's Monitor
-          // detects the close and reconnects with its built-in backoff,
-          // mirroring socket.io-client's retry path. Don't call
-          // cable.connect() manually — let the reconnect machinery run.
-          //
-          // Only count the jitter event when terminate actually severed
-          // a connection. If the cable is already mid-reconnect (no `ws`
-          // ref), we skip the count so csrResumeRatePct denominators stay
-          // honest.
-          if (terminateCableWs(cable)) {
-            stat.jitterCount++;
-          }
-          // Hold the "offline" window. Reconnect attempts may fire
-          // during or after this window — that's the system under test.
+          // Unclean network drop. BOTH clients then recover via their OWN
+          // reconnect machinery (connect() is a no-op), so each reflects real
+          // behavior and the default-vs-tuned reconnect profile actually bites:
+          //  - @anycable/core: Monitor auto-reconnects on its reconnectStrategy
+          //    (default backoff ~1.5-9s, or tuned ~0.5s), then AnyCable resumes
+          //    messages broadcast during the outage (sid retained) → 100%
+          //    delivery, tail = reconnect delay + replay.
+          //  - @rails/actioncable: ConnectionMonitor reconnects on its
+          //    staleThreshold (default ~6s, or tuned ~0.5s); base protocol has
+          //    no resume, so messages in the window are lost → delivery reflects
+          //    both the missing replay AND the real reconnect latency.
+          // The jitterDurationMs sleep just paces the loop before the next drop;
+          // actual offline time is set by each client's reconnect schedule.
+          stat.jitterCount++;
+          conn.disconnect();
           await new Promise((r) => setTimeout(r, p.jitterDurationMs));
+          conn.connect();
           next = Date.now() + (p.jitterIntervalSec + Math.random() * 5) * 1000;
         }
         await new Promise((r) => setTimeout(r, 500));
@@ -197,9 +347,9 @@ export async function runJitterAnycable(
 
   await Promise.all([publishTask, ...jitterTasks]);
 
-  for (const c of cables) {
+  for (const conn of conns) {
     try {
-      c.disconnect();
+      conn.destroy();
     } catch {
       /* tear-down errors are not interesting */
     }

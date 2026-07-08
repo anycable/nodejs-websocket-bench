@@ -1,0 +1,11 @@
+# Per-service Railway config for the Rails cable-bench targets
+# (rails-solidcable / rails-actioncable / rails-anycable).
+#
+# The repo-root railway.toml points at backend/Dockerfile, which is wrong for
+# this service. Uploading this file as the build root via
+# `railway up --service <name> --path-as-root cable-bench/` overrides the repo
+# default and uses this local Dockerfile. The three services share the image
+# and differ only by the BENCH_MODE env var.
+
+[build]
+dockerfilePath = "Dockerfile"

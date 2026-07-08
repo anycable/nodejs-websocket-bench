@@ -123,6 +123,14 @@ export interface AnycableUrls {
   // Optional NATS broadcaster — used when publisher mode is "nats".
   natsUrl?: string;     // e.g. nats://anycable-go-pro.railway.internal:4242
   natsSubject?: string; // default __anycable__ (matches anycable-go default)
+  // Channel to subscribe to. Defaults to "$pubsub" (anycable-go's public
+  // pub/sub channel via streamFrom). For a real Rails app, pass
+  // "BenchmarkChannel" and the driver subscribes to it with { stream_name }.
+  channel?: string;
+  // WebSocket subprotocol. AnyCable uses the extended Action Cable protocol
+  // ("actioncable-v1-ext-json"); vanilla Action Cable / Async::Cable speak the
+  // base protocol ("actioncable-v1-json").
+  acProtocol?: string;
 }
 
 async function runAnycablePublisher(
@@ -225,7 +233,7 @@ export async function runThroughputAnycable(
     stats.push(stat);
     const cable = createCable(urls.cableUrl, {
       websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket,
-      protocol: "actioncable-v1-ext-json",
+      protocol: (urls.acProtocol ?? "actioncable-v1-ext-json") as never,
       logLevel: "error" as never,
     });
     cable.on("close", () => {});
@@ -233,7 +241,12 @@ export async function runThroughputAnycable(
     cable.on("connect", () => {
       stat.everConnected = true;
     });
-    const channel = cable.streamFrom(p.stream);
+    // "$pubsub" -> anycable-go's signed pub/sub channel (streamFrom). Any
+    // other value -> a real Rails channel subscribed with { stream_name }.
+    const channel =
+      urls.channel && urls.channel !== "$pubsub"
+        ? cable.subscribeTo(urls.channel, { stream_name: p.stream })
+        : cable.streamFrom(p.stream);
     channel.on("message", (msg: unknown) => recordMsg(stat, msg));
     cables.push(cable);
     await maybePauseForRamp(p, i, "tp-ac");

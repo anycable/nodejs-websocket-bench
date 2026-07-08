@@ -94,15 +94,26 @@ curl -s -X POST https://backboard.railway.com/graphql/v2 \
        "variables":{"input":{"serviceId":"<svc-uuid>","environmentId":"<env-uuid>","memoryGB":0.5,"vCPUs":1}}}'
 ```
 
-Or stop a service entirely:
+Or stop a service entirely. Two working ways:
 
 ```bash
-# Stop a deployed container without deleting the service
+# CLI (idempotent; "No deployments found" when already down)
+railway down --service <name> --yes
+
+# GraphQL: remove the latest deployment (halts billing, keeps the service shell)
 curl -s -X POST https://backboard.railway.com/graphql/v2 \
   -H "Authorization: Bearer $RAILWAY_TOKEN" -H "Content-Type: application/json" \
-  -d '{"query":"mutation S($id: String!) { deploymentStop(id: $id) }",
+  -d '{"query":"mutation S($id: String!) { deploymentRemove(id: $id) }",
        "variables":{"id":"<latest-deployment-id>"}}'
 ```
+
+Do NOT use the `deploymentStop` mutation: it returns success and the
+container keeps running (verified the hard way). After teardown, verify
+externally — curl each public domain expecting 404/000 — and remember that
+a limits change after a stop can respawn a fresh deployment, and that
+deployment status `SUCCESS` is a build record which persists after a stop.
+The `fleet-watchdog` GitHub Action (scripts/fleet-watchdog.mjs) opens an
+issue if anything is left running between campaigns.
 
 For the bench-runner shards specifically: they're ~64 MB each at idle,
 so 50 of them is only ~3 GB total. The bigger savings come from the

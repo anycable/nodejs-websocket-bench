@@ -1,0 +1,33 @@
+#!/bin/bash
+# One image, three benchmark targets. BENCH_MODE selects the cable adapter and
+# the process to run:
+#   solidcable  (default) -> Puma serving /cable, Solid Cable (DB polling)
+#   actioncable           -> Puma serving /cable, Action Cable Redis adapter
+#   anycable              -> AnyCable gRPC RPC server (anycable-go is separate)
+set -e
+
+export SECRET_KEY_BASE_DUMMY="${SECRET_KEY_BASE_DUMMY:-1}"
+
+MODE="${BENCH_MODE:-solidcable}"
+case "$MODE" in
+  actioncable) export CABLE_ADAPTER=redis ;;
+  solidcable)  export CABLE_ADAPTER=solid_cable ;;
+  anycable)    export CABLE_ADAPTER=any_cable ;;
+  *) echo "[entrypoint] unknown BENCH_MODE='$MODE' (actioncable|solidcable|anycable)" >&2; exit 1 ;;
+esac
+echo "[entrypoint] BENCH_MODE=$MODE CABLE_ADAPTER=$CABLE_ADAPTER PORT=${PORT:-3000}"
+
+# Create + load the SQLite databases (primary and, for solid_cable, the cable
+# stream table). Idempotent across restarts.
+./bin/rails db:prepare
+
+if [ "$MODE" = "anycable" ]; then
+  # Bind the RPC server on IPv6 so the anycable-go gateway can dial it over
+  # Railway's private network. Override ANYCABLE_RPC_HOST in deploy if needed.
+  export ANYCABLE_RPC_HOST="${ANYCABLE_RPC_HOST:-[::]:50051}"
+  echo "[entrypoint] starting AnyCable RPC server on $ANYCABLE_RPC_HOST"
+  exec bundle exec anycable
+else
+  echo "[entrypoint] starting Puma"
+  exec ./bin/rails server -e production
+fi

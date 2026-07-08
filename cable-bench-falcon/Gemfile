@@ -1,0 +1,71 @@
+source "https://rubygems.org"
+
+# actioncable-next must load before Rails / Action Cable so its load-path entry
+# wins for `require "action_cable/..."`. It is the drop-in Action Cable fork
+# (AnyCable) that adds the ActionCable::Server::Socket abstraction async-cable
+# builds on. require:false — it is pulled in via the explicit action_cable
+# requires in config/application.rb, not auto-required by name.
+gem "actioncable-next", require: false
+
+# Bundle edge Rails instead: gem "rails", github: "rails/rails", branch: "main"
+gem "rails", "~> 8.1.3"
+# The modern asset pipeline for Rails [https://github.com/rails/propshaft]
+gem "propshaft"
+# Use sqlite3 as the database for Active Record
+gem "sqlite3", ">= 2.1"
+
+# AsyncCable target: fiber-based Action Cable served in-process by Falcon
+# (async ecosystem) instead of Puma's threads. Same Action Cable wire protocol;
+# the WebSockets are handled by Async::Cable::Middleware on a Falcon reactor.
+gem "falcon"
+# Pinned to async-cable @27181dff1 (2026-05-29): the 0.3.1 release lacks
+# Socket#raw_transmit, which actioncable-next fastlane broadcasts require
+# (without it fastlane raises NoMethodError -> 0% delivery). This commit adds
+# it natively and still allows Rails 8.1 (gemspec actioncable >= 8.1.0.alpha).
+# We do NOT use main HEAD: the later Executor commit (dddef54c) bumped the
+# gemspec to actioncable >= 8.2.0.alpha (edge Rails only). We instead vendor
+# that fiber Executor in config/initializers/async_cable_executor.rb, since
+# its code is self-contained and async-cable does not auto-wire it anyway.
+gem "async-cable", github: "socketry/async-cable", ref: "27181dff124d2e5a933cb9abf2581c8e86532956", require: "async/cable"
+
+# Use JavaScript with ESM import maps [https://github.com/rails/importmap-rails]
+gem "importmap-rails"
+# Hotwire's SPA-like page accelerator [https://turbo.hotwired.dev]
+gem "turbo-rails"
+# Hotwire's modest JavaScript framework [https://stimulus.hotwired.dev]
+gem "stimulus-rails"
+
+# Windows does not include zoneinfo files, so bundle the tzinfo-data gem
+gem "tzinfo-data", platforms: %i[ windows jruby ]
+
+# Use the database-backed adapters for Rails.cache, Active Job, and Action Cable
+gem "solid_cache"
+gem "solid_queue"
+gem "solid_cable"
+
+# Cross-process broadcast for the Falcon workers, matching the Action Cable
+# Redis-adapter target so the only variable is the WS engine (Falcon fibers
+# vs Puma threads).
+gem "redis", ">= 4.0"
+
+# Reduces boot times through caching; required in config/boot.rb
+gem "bootsnap", require: false
+
+group :development, :test do
+  # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
+  gem "debug", platforms: %i[ mri windows ], require: "debug/prelude"
+
+  # Audits gems for known security defects (use config/bundler-audit.yml to ignore issues)
+  gem "bundler-audit", require: false
+
+  # Static analysis for security vulnerabilities [https://brakemanscanner.org/]
+  gem "brakeman", require: false
+
+  # Omakase Ruby styling [https://github.com/rails/rubocop-rails-omakase/]
+  gem "rubocop-rails-omakase", require: false
+end
+
+group :development do
+  # Use console on exceptions pages [https://github.com/rails/web-console]
+  gem "web-console"
+end

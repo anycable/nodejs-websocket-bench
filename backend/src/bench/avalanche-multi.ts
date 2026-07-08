@@ -45,6 +45,24 @@ const railwayService = process.env.RAILWAY_SERVICE || "socketio-server";
 // regular one (e.g. socketio-server-csr.railway.internal:3000).
 const serverUrl = process.env.SERVER_URL;
 
+// Protocol selects the bench-runner endpoint (/bench-avalanche-<protocol>).
+// Default to anycable for Rails RPC services, else socketio. The anycable
+// endpoint also drives the Rails Action Cable / Solid Cable / Async::Cable
+// targets when given channel + acProtocol + cableUrl (base or ext protocol).
+const protocol = (
+  process.env.PROTOCOL ||
+  (railwayService.startsWith("rails-") ? "anycable" : "socketio")
+).toLowerCase();
+// Rails target overrides, forwarded to /bench-avalanche-anycable.
+const channel = process.env.CHANNEL;
+const acProtocol = process.env.AC_PROTOCOL;
+const cableUrl = process.env.CABLE_URL;
+// Client reconnect backoff for the gateway-redeploy test (default | tuned |
+// resume-aware). On a gateway restart every client fresh-connects (RPC to
+// Rails); tuned storms the backend, resume-aware bounds it.
+const reconnectMode = process.env.RECONNECT_MODE;
+const reconnectBaseMs = process.env.RECONNECT_BASE_MS;
+
 const scales = (process.env.SCALES || "1000,2500,5000,10000,20000")
   .split(",")
   .map((s) => parseInt(s.trim(), 10))
@@ -103,10 +121,17 @@ async function runOneScale(n: number): Promise<ScaleRow | null> {
     stream: `avalanche-${n}`,
   });
   if (serverUrl) qs.set("serverUrl", serverUrl);
+  // Rails targets: forward the channel + wire protocol + WS URL so the
+  // anycable avalanche endpoint connects to the real Rails app.
+  if (channel) qs.set("channel", channel);
+  if (acProtocol) qs.set("acProtocol", acProtocol);
+  if (cableUrl) qs.set("cableUrl", cableUrl);
+  if (reconnectMode) qs.set("reconnectMode", reconnectMode);
+  if (reconnectBaseMs) qs.set("reconnectBaseMs", reconnectBaseMs);
 
   const startedAt = Date.now();
   const responsePromise = benchRunnerFetch(
-    `${benchRunnerUrl}/bench-avalanche-socketio?${qs.toString()}`,
+    `${benchRunnerUrl}/bench-avalanche-${protocol}?${qs.toString()}`,
     { method: "POST" }
   );
 

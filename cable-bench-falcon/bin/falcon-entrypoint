@@ -1,0 +1,21 @@
+#!/bin/bash
+# AsyncCable target: Rails served by Falcon (async/fiber reactor) instead of
+# Puma. WebSockets at /cable are handled in-process by Async::Cable::Middleware;
+# cross-process broadcast goes through the Redis cable adapter (matching the
+# Action Cable Redis target so the only variable is the WS engine).
+set -e
+
+export SECRET_KEY_BASE_DUMMY="${SECRET_KEY_BASE_DUMMY:-1}"
+PORT="${PORT:-3000}"
+# Falcon forks this many reactor processes. Match the Puma worker count used by
+# the other targets (WEB_CONCURRENCY) so the box-level parallelism is the same.
+COUNT="${WEB_CONCURRENCY:-8}"
+
+echo "[entrypoint] AsyncCable on Falcon: port=$PORT count=$COUNT adapter=redis"
+
+# Primary + solid_cache/solid_queue tables (cable fan-out is Redis, no DB).
+./bin/rails db:prepare
+
+# Bind on IPv6 so Railway's private network can reach it. http:// = plaintext
+# HTTP/1.1 + h2c; the WebSocket upgrade rides HTTP/1.1.
+exec bundle exec falcon serve --bind "http://[::]:${PORT}" --count "${COUNT}"

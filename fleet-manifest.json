@@ -1,0 +1,72 @@
+{
+  "$comment": "Fleet-as-code: what the Railway project is supposed to look like. bench:preflight and bench:fleet diff live state against this. Update it when the fleet's intended shape changes; drift between this file and reality is a finding, whichever side is wrong.",
+  "project": "gentle-commitment",
+  "projectId": "fd842a43-8d78-48c0-879f-4b5311c8c004",
+  "environment": "production",
+  "environmentId": "284c9b0a-57cb-4281-a4bd-868473a94a47",
+  "runnerPattern": "^bench-runner(-\\d+)?$",
+  "$runnerNote": "bench-runner-81 runs the Centrifugo target image (repurposed 2026-07; the project is at the 100-service cap). Never use it as a load-generator shard.",
+  "excludedRunners": ["bench-runner-81"],
+  "sharedSecrets": ["BENCH_RUNNER_TOKEN", "ANYCABLE_BROADCAST_SECRET"],
+  "idleExpectation": "torn down",
+  "$idleNote": "Between campaigns every service should have NO active deployment (teardown = deploymentRemove per service). Any live deployment outside a run window is billing for nothing; the fleet watchdog alerts on it.",
+  "targets": {
+    "anycable-go": {
+      "role": "AnyCable OSS gateway",
+      "expectEnv": [],
+      "forbidEnv": { "ANYCABLE_BROADCAST_ADAPTER": "nats" },
+      "notes": "http broadcast adapter is the default and the only one the bench publish path reaches; an explicit nats setting silently delivers nothing (200 OK, 0% delivery)."
+    },
+    "anycable-go-pro": {
+      "role": "AnyCable Pro gateway",
+      "expectEnv": [],
+      "forbidEnv": { "ANYCABLE_BROADCAST_ADAPTER": "nats" },
+      "notes": "Custom Dockerfile: deploy only with per-service railway.toml + --path-as-root anycable-pro/. Needs GITHUB_TOKEN build arg. EMBED_NATS adds a broadcast hop; state it next to throughput numbers."
+    },
+    "socketio-server": {
+      "role": "Socket.io (default)",
+      "expectEnv": [],
+      "notes": "SOCKETIO_CSR must be UNSET here; check NODE_OPTIONS heap fits the container after any resize."
+    },
+    "socketio-server-csr": {
+      "role": "Socket.io with Connection state recovery",
+      "expectEnv": ["SOCKETIO_CSR"],
+      "notes": "SOCKETIO_CSR=1 at boot. Internal DNS may still resolve the pre-rename hostname; see tests-manifest."
+    },
+    "uws-server": {
+      "role": "uWebSockets.js",
+      "expectEnv": [],
+      "notes": ""
+    },
+    "rails-actioncable": {
+      "role": "Rails + Puma Action Cable",
+      "expectEnv": ["WEB_CONCURRENCY", "RAILS_MAX_THREADS"],
+      "notes": "WEB_CONCURRENCY only works because puma.rb has an explicit workers directive (stock puma.rb ignores it). Verify worker count from boot logs, never from env alone. Reset to 8 after any experiment."
+    },
+    "rails-solidcable": {
+      "role": "Rails + Solid Cable",
+      "expectEnv": ["WEB_CONCURRENCY", "RAILS_MAX_THREADS"],
+      "notes": "Same puma.rb caveat as rails-actioncable."
+    },
+    "rails-asynccable": {
+      "role": "Falcon + Async::Cable",
+      "expectEnv": [],
+      "notes": "falcon serve --count must match Puma's worker count. Needs the raw_transmit shim until async-cable ships it."
+    },
+    "rails-anycable": {
+      "role": "Rails RPC backend for AnyCable",
+      "expectEnv": ["ANYCABLE_SECRET"],
+      "notes": "Bring this up BEFORE anycable-go-rails; the gateway caches a dead grpc connection otherwise. DB pool must be >= RPC pool (30) for storm tests."
+    },
+    "anycable-go-rails": {
+      "role": "AnyCable gateway for the Rails comparison",
+      "expectEnv": [],
+      "notes": "Image service (no repo build): railway down removes its deployment and railway redeploy then fails; revive with a variable nudge (railway variables --set NUDGE=<ts>)."
+    },
+    "Redis": {
+      "role": "Broker for Action Cable / Socket.io Redis adapter",
+      "expectEnv": [],
+      "notes": "DB service with a volume: cannot be revived via CLI, dashboard only. After it returns, redeploy dependent Rails targets (they cache dead connections)."
+    }
+  }
+}

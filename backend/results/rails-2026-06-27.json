@@ -1,0 +1,242 @@
+{
+  "benchmark": "rails-actioncable",
+  "page": "https://anycable.io/compare/rails-actioncable",
+  "capturedAt": "2026-06-27",
+  "hardware": "Railway shared-tenant window; Rails 8.1, Puma 8 workers x 5 threads; anycable-go gateway + Rails gRPC RPC (anycable-rails 1.6)",
+  "targets": [
+    "Action Cable (Redis adapter)",
+    "Solid Cable (DB adapter)",
+    "AnyCable (RPC mode, anycable-go gateway)"
+  ],
+  "results": {
+    "latency": {
+      "solidcable-1k": {
+        "clients": 1000,
+        "connectedClients": 1000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 62,
+          "p50": 62,
+          "p95": 108,
+          "p99": 115,
+          "max": 148
+        }
+      },
+      "solidcable-5k": {
+        "clients": 5000,
+        "connectedClients": 5000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 85,
+          "p50": 86,
+          "p95": 141,
+          "p99": 163,
+          "max": 276
+        }
+      },
+      "actioncable-1k": {
+        "clients": 1000,
+        "connectedClients": 1000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 19,
+          "p50": 18,
+          "p95": 30,
+          "p99": 70,
+          "max": 96
+        }
+      },
+      "actioncable-5k": {
+        "clients": 5000,
+        "connectedClients": 5000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 61,
+          "p50": 58,
+          "p95": 109,
+          "p99": 245,
+          "max": 309
+        }
+      },
+      "anycable-1k": {
+        "clients": 1000,
+        "connectedClients": 1000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 15,
+          "p50": 15,
+          "p95": 25,
+          "p99": 32,
+          "max": 50
+        }
+      },
+      "anycable-5k": {
+        "clients": 5000,
+        "connectedClients": 5000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 175,
+          "p50": 225,
+          "p95": 446,
+          "p99": 685,
+          "max": 712
+        }
+      }
+    },
+    "jitter": {
+      "solidcable-5k": {
+        "clients": 5000,
+        "connectedClients": 5000,
+        "deliveryRatePct": 28.05,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 84,
+          "p50": 84,
+          "p95": 151,
+          "p99": 183,
+          "max": 216
+        }
+      },
+      "actioncable-5k": {
+        "clients": 5000,
+        "connectedClients": 5000,
+        "deliveryRatePct": 26.7,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 51,
+          "p50": 45,
+          "p95": 101,
+          "p99": 239,
+          "max": 270
+        }
+      },
+      "anycable-5k": {
+        "clients": 5000,
+        "connectedClients": 5000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 684,
+          "p50": 230,
+          "p95": 3908,
+          "p99": 5976,
+          "max": 8862
+        }
+      }
+    },
+    "capacityUnderLoad": {
+      "solidcable-10k": {
+        "clients": 10000,
+        "connectedClients": 6003,
+        "deliveryRatePct": 0,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "actioncable-10k": {
+        "clients": 10000,
+        "connectedClients": 6001,
+        "deliveryRatePct": 0,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "anycable-10k": {
+        "clients": 10000,
+        "connectedClients": 10000,
+        "deliveryRatePct": 100,
+        "connectFailures": 0,
+        "latencyRawMs": {
+          "avg": 304,
+          "p50": 255,
+          "p95": 705,
+          "p99": 921,
+          "max": 9764
+        }
+      }
+    },
+    "idle": {
+      "solidcable": {
+        "connected": 52000,
+        "welcomed": 52000,
+        "subscribed": 52000,
+        "failed": 0
+      },
+      "actioncable": {
+        "connected": 52000,
+        "welcomed": 52000,
+        "subscribed": 52000,
+        "failed": 0
+      },
+      "anycable": {
+        "connected": 156000,
+        "welcomed": 156000,
+        "subscribed": 156000,
+        "failed": 0
+      }
+    },
+    "avalanche": {
+      "solidcable-5k": {
+        "clients": 5000,
+        "initiallyConnected": 5000,
+        "disconnected": 5000,
+        "reconnected": 4785,
+        "reconnectRatePct": 95.7,
+        "neverReconnected": 215,
+        "recoveryTimeMs": 7640,
+        "reconnectMs": {
+          "p50": 4460,
+          "p95": 7137,
+          "p99": 7604,
+          "max": 7744
+        }
+      },
+      "actioncable-5k": {
+        "clients": 5000,
+        "initiallyConnected": 5000,
+        "disconnected": 5000,
+        "reconnected": 4813,
+        "reconnectRatePct": 96.26,
+        "neverReconnected": 187,
+        "recoveryTimeMs": 7526,
+        "reconnectMs": {
+          "p50": 4379,
+          "p95": 7091,
+          "p99": 7567,
+          "max": 7750
+        }
+      },
+      "anycable-5k": {
+        "clients": 5000,
+        "initiallyConnected": 5000,
+        "disconnected": 0,
+        "reconnected": 0,
+        "reconnectRatePct": 0,
+        "neverReconnected": 5000,
+        "recoveryTimeMs": 0,
+        "reconnectMs": {
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      }
+    }
+  }
+}

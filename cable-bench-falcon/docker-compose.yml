@@ -1,0 +1,21 @@
+# Local validation of the AsyncCable (Falcon) target against the production
+# image. Mirrors the Railway topology (Falcon + Redis cable adapter) so we can
+# shake out config before deploying.
+#
+#   docker compose up --build
+#
+#   AsyncCable:  ws://localhost:3003/cable   broadcast http://localhost:3003/_bench/broadcast
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  rails-asynccable:
+    build: .
+    image: cable-bench-falcon:local
+    environment:
+      PORT: "3000"
+      WEB_CONCURRENCY: "2"
+      REDIS_URL: redis://redis:6379/1
+    ports: ["3003:3000"]
+    depends_on: [redis]

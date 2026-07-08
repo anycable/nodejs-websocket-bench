@@ -65,6 +65,13 @@ export interface RunShardsOptions {
   // Per-shard absolute ceiling. If a shard hasn't reported done by then,
   // we abandon polling on it and mark it failed. Default 60 min.
   shardTimeoutMs?: number;
+  // New-style runners echo {effectiveParams, unknownParams} in the 202
+  // enqueue response. By default a shard fails fast when the runner
+  // reports it would ignore a param we sent, or when an echoed value
+  // differs from what we sent — both mean the test is about to run with
+  // different parameters than the driver believes. Set true only for a
+  // deliberate mixed-fleet run.
+  allowParamMismatch?: boolean;
 }
 
 interface ShardState<T> {
@@ -80,13 +87,35 @@ interface ShardState<T> {
   lastPrintedLogIdx: number;
 }
 
+// Compare what we sent against what the runner says it parsed. Only keys
+// present under the same name on both sides are compared — parser-side
+// names sometimes differ (msgs → totalMessages), and the unknown-params
+// check covers keys the runner doesn't read at all.
+function paramEchoMismatches(
+  sent: Record<string, string | number>,
+  effective: Record<string, unknown>,
+): string[] {
+  const mismatches: string[] = [];
+  for (const [k, v] of Object.entries(sent)) {
+    if (!(k in effective)) continue;
+    const echoed = effective[k];
+    if (echoed === undefined || echoed === null) continue;
+    if (String(echoed) !== String(v)) {
+      mismatches.push(`${k}: sent ${v}, runner parsed ${String(echoed)}`);
+    }
+  }
+  return mismatches;
+}
+
 // Enqueue returns one of three shapes:
 //   - {jobId}     new-style async bench-runner; caller polls /jobs/:id
 //   - {syncResult} pre-async bench-runner ignored ?async=1 and returned
 //                  the full result inline. Treat as already-done.
-//   - {error}     network / HTTP failure.
+//   - {error}     network / HTTP failure, or a param the runner would
+//                 ignore / misparse (fail fast before wasting the run).
 async function enqueueShard(
   shard: ShardSpec,
+  allowParamMismatch: boolean,
 ): Promise<
   { jobId: string } | { syncResult: unknown } | { error: string }
 > {
@@ -103,6 +132,32 @@ async function enqueueShard(
     }
     const body = (await res.json()) as Record<string, unknown>;
     if (typeof body.jobId === "string") {
+      // Params echo verification (new-style runners only). A shard that
+      // would silently ignore or default a param is failed here, before
+      // the fleet burns a full run measuring the wrong configuration.
+      const unknown = Array.isArray(body.unknownParams)
+        ? (body.unknownParams as string[])
+        : undefined;
+      if (unknown === undefined) {
+        console.log(
+          `  ! ${shard.label}: runner does not echo params (old image?) — param verification skipped`,
+        );
+      } else if (unknown.length > 0) {
+        const msg = `runner ignores query params: ${unknown.join(", ")} (endpoint /${shard.endpoint} does not read them; check the key names)`;
+        if (!allowParamMismatch) return { error: msg };
+        console.log(`  ! ${shard.label}: ${msg}`);
+      }
+      if (body.effectiveParams && typeof body.effectiveParams === "object") {
+        const mismatches = paramEchoMismatches(
+          shard.query,
+          body.effectiveParams as Record<string, unknown>,
+        );
+        if (mismatches.length > 0) {
+          const msg = `param echo mismatch: ${mismatches.join("; ")}`;
+          if (!allowParamMismatch) return { error: msg };
+          console.log(`  ! ${shard.label}: ${msg}`);
+        }
+      }
       return { jobId: body.jobId };
     }
     // Old bench-runner: returned the full sync result instead of {jobId}.
@@ -171,6 +226,7 @@ export async function runShards<T>(
   const pollLogLines = opts.pollLogLines ?? 30;
   const printProgress = opts.printProgress ?? true;
   const shardTimeoutMs = opts.shardTimeoutMs ?? 60 * 60 * 1000;
+  const allowParamMismatch = opts.allowParamMismatch ?? false;
 
   console.log(`Enqueuing ${shards.length} shard(s)...`);
   const states: ShardState<T>[] = shards.map((s) => ({
@@ -183,7 +239,7 @@ export async function runShards<T>(
 
   await Promise.all(
     states.map(async (state) => {
-      const r = await enqueueShard(state.spec);
+      const r = await enqueueShard(state.spec, allowParamMismatch);
       if ("error" in r) {
         state.enqueueError = r.error;
         state.status = "failed";

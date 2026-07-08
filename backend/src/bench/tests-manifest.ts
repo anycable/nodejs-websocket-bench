@@ -43,14 +43,20 @@ export interface TestSpec {
   // - "sync"        blocks on the response. <5 min tests only.
   // - "async"       enqueues, polls /jobs/:id. For tests that may run >5 min.
   // - "multi-shard" fans out across N bench-runner replicas via the
-  //                 shard-coordinator; rebaseline merges per-shard results.
-  //                 Set numShards + perShardN. Idle capacity tests use this.
+  //                 shard-coordinator and SUMS idle-style counts
+  //                 (connected/welcomed/subscribed/failed). Set numShards +
+  //                 perShardN. Idle capacity tests use this.
+  // - "multi-jitter" fans out a jitter/latency test across N replicas and
+  //                 merges JitterResults properly (union percentiles via
+  //                 latencySamplesSorted), running the validity checks.
+  //                 Set numShards + perShardN; keep perShardN near 250 —
+  //                 a loaded runner inflates latency and deflates delivery.
   // - "avalanche"   async test where the runner triggers `railway service
   //                 redeploy` mid-flight to simulate the in-process WS
   //                 layer restarting under N held connections. Set
   //                 redeployServiceName + the bench-runner endpoint's
   //                 prearmSec param.
-  mode: "sync" | "async" | "multi-shard" | "avalanche";
+  mode: "sync" | "async" | "multi-shard" | "multi-jitter" | "avalanche";
   params: Record<string, string | number>;
   // Page baseline values, keyed by dotted paths into the result JSON.
   baseline: Record<string, number | string>;
@@ -101,13 +107,43 @@ const TARGETS = {
   // See docs/socketioxide-comparison.md for the open question to the
   // library author.
   socketioxide: "http://socketioxide-server.railway.internal:3000",
+
+  // Rails broadcasting comparison (AnyCable vs Action Cable vs Solid Cable).
+  // One Rails app (cable-bench/), three deployments selected by BENCH_MODE.
+  // Action Cable / Solid Cable terminate WebSockets in Puma and expose the
+  // app's POST /_bench/broadcast publish endpoint; the bench-runner reuses the
+  // anycable jitter/idle/avalanche endpoints with ?channel=BenchmarkChannel and
+  // ?acProtocol=actioncable-v1-json. AnyCable terminates in a separate
+  // anycable-go gateway (RPC -> the Rails app) and publishes via the gateway's
+  // /_broadcast, exactly like the standalone AnyCable target, but over the
+  // extended protocol and a real BenchmarkChannel.
+  railsSolidCable: "ws://rails-solidcable.railway.internal:3000/cable",
+  railsSolidCableBroadcast: "http://rails-solidcable.railway.internal:3000/_bench/broadcast",
+  railsActionCable: "ws://rails-actioncable.railway.internal:3000/cable",
+  railsActionCableBroadcast: "http://rails-actioncable.railway.internal:3000/_bench/broadcast",
+  railsAnyCable: "ws://anycable-go-rails.railway.internal:8080/cable",
+  railsAnyCableBroadcast: "http://anycable-go-rails.railway.internal:8080/_broadcast",
+  // AsyncCable: standard Action Cable wire protocol, served in-process by
+  // Falcon (async/fibers) instead of Puma. Same /cable + /_bench/broadcast
+  // surface as the other in-process Rails targets.
+  railsAsyncCable: "ws://rails-asynccable.railway.internal:3000/cable",
+  railsAsyncCableBroadcast: "http://rails-asynccable.railway.internal:3000/_bench/broadcast",
 };
+
+// Action Cable subscribe presets. BenchmarkChannel is the channel the Rails
+// app exposes (cable-bench/app/channels/benchmark_channel.rb). Vanilla Action
+// Cable / Solid Cable speak the base protocol; AnyCable the extended one.
+const RAILS_BASE = { channel: "BenchmarkChannel", acProtocol: "actioncable-v1-json" };
+const RAILS_EXT = { channel: "BenchmarkChannel", acProtocol: "actioncable-v1-ext-json" };
 
 // Common knobs reused across tests. Keep these explicit so the manifest
 // is self-documenting; copy-paste is fine when a test deviates.
 const LATENCY_1K = { msgs: 100, interval: 500, ramp: 100, duration: 90, jitter: 999999 };
 const LATENCY_10K = { msgs: 100, interval: 500, ramp: 200, duration: 130, jitter: 999999 };
 const JITTER_10K = { msgs: 120, interval: 500, ramp: 200, duration: 160, jitter: 15, jitterMs: 1000 };
+// Rails jitter runs enforce a standard 2 s outage (disconnect, wait, connect)
+// so every client library faces the same disruption regardless of backoff.
+const RAILS_JITTER_5K = { msgs: 120, interval: 500, ramp: 200, duration: 160, jitter: 15, jitterMs: 2000 };
 const WHISPERS_1K = { rooms: 10, ramp: 100, interval: 500, duration: 30, payload: 64 };
 const THROUGHPUT_10K_1M = { n: 10000, total: 100, intervalMs: 10, ramp: 200, drain: 30, publisher: "pool", publisherConcurrency: 16 };
 
@@ -626,6 +662,290 @@ export const tests: TestSpec[] = [
     mode: "avalanche",
     redeployServiceName: "socketioxide-server",
     params: { n: 20000, ramp: 200, prearm: 240, recoveryWait: 600, stream: "avalanche-sox-20k", serverUrl: TARGETS.socketioxide },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+
+  // ===========================================================================
+  // Rails broadcasting: AnyCable vs Action Cable vs Solid Cable vs Async::Cable
+  //
+  // One Rails app, four cable backends. All speak Action Cable at the app
+  // level (same BenchmarkChannel), but: Solid Cable and Action Cable terminate
+  // WebSockets in Puma (in-process Ruby; Solid Cable also polls the DB),
+  // Async::Cable serves them from Falcon fibers, while AnyCable offloads them
+  // to anycable-go (Rails is only the gRPC backend) and speaks the extended
+  // protocol with delivery guarantees. Latency/jitter baselines mirror the
+  // numbers published on compare/rails-actioncable (2026-07-01 native-client
+  // window). Fairness preconditions the numbers depend on (verify via
+  // bench:preflight before trusting a red/green): WEB_CONCURRENCY=8 actually
+  // applied (boot logs, cluster mode), falcon --count matched, equal box
+  // sizes. Reuses the anycable bench-runner endpoints via ?channel +
+  // ?acProtocol; no new endpoints for latency/jitter.
+  // ===========================================================================
+
+  // Latency (jitter-disabled roundtrip). SHARDED: single-runner runs at 5K
+  // produced the retracted 225 ms artifact (the runner's event loop, not the
+  // adapter); keep per-shard N at 250. Baselines are the numbers published
+  // on compare/rails-actioncable (2026-07-01 native-client window); the
+  // usual manifest caveat applies — a quieter window may come in lower.
+  // Shared-tenant swings are large, hence the wide thresholds.
+  {
+    id: "latency-rails-actioncable-1k",
+    description: "Roundtrip latency, Rails + Action Cable (Redis), 1K subs (4x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 4,
+    perShardN: 250,
+    params: { ...LATENCY_1K, ...RAILS_BASE, cableUrl: TARGETS.railsActionCable, broadcastUrl: TARGETS.railsActionCableBroadcast },
+    baseline: { "latencyRawMs.p50": 11, "latencyRawMs.p99": 48, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "latency-rails-actioncable-5k",
+    description: "Roundtrip latency, Rails + Action Cable (Redis), 5K subs (20x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...LATENCY_10K, ...RAILS_BASE, cableUrl: TARGETS.railsActionCable, broadcastUrl: TARGETS.railsActionCableBroadcast },
+    baseline: { "latencyRawMs.p50": 11, "latencyRawMs.p99": 48, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "latency-rails-solidcable-1k",
+    description: "Roundtrip latency, Rails + Solid Cable, 1K subs (4x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 4,
+    perShardN: 250,
+    params: { ...LATENCY_1K, ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable, broadcastUrl: TARGETS.railsSolidCableBroadcast },
+    baseline: { "latencyRawMs.p50": 68, "latencyRawMs.p99": 143, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "latency-rails-solidcable-5k",
+    description: "Roundtrip latency, Rails + Solid Cable, 5K subs (20x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...LATENCY_10K, ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable, broadcastUrl: TARGETS.railsSolidCableBroadcast },
+    baseline: { "latencyRawMs.p50": 88, "latencyRawMs.p99": 190, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "latency-rails-asynccable-1k",
+    description: "Roundtrip latency, Rails + Async::Cable (Falcon), 1K subs (4x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 4,
+    perShardN: 250,
+    params: { ...LATENCY_1K, ...RAILS_BASE, cableUrl: TARGETS.railsAsyncCable, broadcastUrl: TARGETS.railsAsyncCableBroadcast },
+    baseline: { "latencyRawMs.p50": 15, "latencyRawMs.p99": 50, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "latency-rails-asynccable-5k",
+    description: "Roundtrip latency, Rails + Async::Cable (Falcon), 5K subs (20x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...LATENCY_10K, ...RAILS_BASE, cableUrl: TARGETS.railsAsyncCable, broadcastUrl: TARGETS.railsAsyncCableBroadcast },
+    baseline: { "latencyRawMs.p50": 15, "latencyRawMs.p99": 55, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "latency-rails-anycable-1k",
+    description: "Roundtrip latency, Rails + AnyCable (Go gateway), 1K subs (4x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 4,
+    perShardN: 250,
+    params: { ...LATENCY_1K, ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable, broadcastUrl: TARGETS.railsAnyCableBroadcast },
+    baseline: { "latencyRawMs.p50": 6, "latencyRawMs.p99": 22, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+  {
+    id: "latency-rails-anycable-5k",
+    description: "Roundtrip latency, Rails + AnyCable (Go gateway), 5K subs (20x250)",
+    category: "latency",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...LATENCY_10K, ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable, broadcastUrl: TARGETS.railsAnyCableBroadcast },
+    baseline: { "latencyRawMs.p50": 6, "latencyRawMs.p99": 29, deliveryRatePct: 100 },
+    driftThresholdPct: 50,
+  },
+
+  // Reliability under WiFi jitter (2 s enforced outage). NATIVE CLIENTS:
+  // the Action Cable family runs @rails/actioncable (clientLib=actioncable,
+  // poll-based reconnect, no resume) and AnyCable runs @anycable/core with
+  // its stock backoff — the client library is a first-order variable here
+  // (switching to native clients moved delivery 78% -> 53%). AnyCable's p99
+  // tail is client reconnect backoff, never server replay; expect ~2 s.
+  {
+    id: "jitter-rails-actioncable-5k",
+    description: "Reliability under WiFi jitter, Rails + Action Cable (Redis), 5K (20x250, native client)",
+    category: "jitter",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...RAILS_JITTER_5K, ...RAILS_BASE, clientLib: "actioncable", cableUrl: TARGETS.railsActionCable, broadcastUrl: TARGETS.railsActionCableBroadcast },
+    baseline: { deliveryRatePct: 53, "latencyRawMs.p50": 12 },
+    driftThresholdPct: 15,
+  },
+  {
+    id: "jitter-rails-solidcable-5k",
+    description: "Reliability under WiFi jitter, Rails + Solid Cable, 5K (20x250, native client)",
+    category: "jitter",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...RAILS_JITTER_5K, ...RAILS_BASE, clientLib: "actioncable", cableUrl: TARGETS.railsSolidCable, broadcastUrl: TARGETS.railsSolidCableBroadcast },
+    baseline: { deliveryRatePct: 53, "latencyRawMs.p50": 68 },
+    driftThresholdPct: 15,
+  },
+  {
+    id: "jitter-rails-asynccable-5k",
+    description: "Reliability under WiFi jitter, Rails + Async::Cable (Falcon), 5K (20x250, native client)",
+    category: "jitter",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...RAILS_JITTER_5K, ...RAILS_BASE, clientLib: "actioncable", cableUrl: TARGETS.railsAsyncCable, broadcastUrl: TARGETS.railsAsyncCableBroadcast },
+    baseline: { deliveryRatePct: 53, "latencyRawMs.p50": 14 },
+    driftThresholdPct: 15,
+  },
+  {
+    id: "jitter-rails-anycable-5k",
+    description: "Reliability under WiFi jitter, Rails + AnyCable, 5K (20x250, stock @anycable/core backoff)",
+    category: "jitter",
+    endpoint: "bench-jitter-anycable",
+    mode: "multi-jitter",
+    numShards: 20,
+    perShardN: 250,
+    params: { ...RAILS_JITTER_5K, ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable, broadcastUrl: TARGETS.railsAnyCableBroadcast },
+    // p99 is the client's reconnect backoff window, wide threshold.
+    baseline: { deliveryRatePct: 100, "latencyRawMs.p50": 7, "latencyRawMs.p99": 2000 },
+    driftThresholdPct: 60,
+  },
+
+  // Idle capacity. In-process Puma (Solid/Action Cable) tops out far below the
+  // Go gateway; targets are sized to find each ceiling (in-process ~200K probe,
+  // AnyCable 1M). Fill targetServiceId after deploy to attach Railway memory/CPU.
+  {
+    id: "idle-rails-solidcable",
+    description: "Idle connections held, Rails + Solid Cable",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 4000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_BASE, cableUrl: TARGETS.railsSolidCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+  {
+    id: "idle-rails-actioncable",
+    description: "Idle connections held, Rails + Action Cable (Redis)",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 4000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_BASE, cableUrl: TARGETS.railsActionCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+  {
+    id: "idle-rails-anycable",
+    description: "Idle connections held, Rails + AnyCable (Go gateway)",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 12000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+  {
+    id: "idle-rails-asynccable",
+    description: "Idle connections held, Rails + AsyncCable (Falcon)",
+    category: "idle",
+    endpoint: "bench-idle-anycable",
+    mode: "multi-shard",
+    numShards: 13,
+    perShardN: 4000,
+    params: { hold: 120, ramp: 200, stream: "idle-rails", ...RAILS_BASE, cableUrl: TARGETS.railsAsyncCable },
+    baseline: {},
+    driftThresholdPct: 60,
+  },
+
+  // Deploy survival. Redeploy the Rails service mid-test. Action Cable / Solid
+  // Cable run WebSockets in Puma, so a deploy drops every connection; AnyCable
+  // runs them in anycable-go, so redeploying the Rails RPC backend leaves the
+  // fleet connected (expected disconnected ~0). Native clients for the
+  // in-process adapters (clientLib=actioncable), matching the page's
+  // methodology. Baselines stay EMPTY on purpose: the published deploy
+  // numbers (recovery to 95% in ~13.5-13.8 s, ~96% reconnected) came from
+  // the SHARDED avalanche-multi drivers; these single-runner 5K specs are
+  // smoke checks, and pinning sharded-run numbers to them would compare
+  // different methodologies. Wiring sharded avalanche into the manifest is
+  // an open TODO.
+  {
+    id: "avalanche-rails-solidcable-5k",
+    description: "Avalanche: 5K Rails + Solid Cable clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-solidcable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-sc", ...RAILS_BASE, clientLib: "actioncable", cableUrl: TARGETS.railsSolidCable },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-rails-actioncable-5k",
+    description: "Avalanche: 5K Rails + Action Cable clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-actioncable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-ac", ...RAILS_BASE, clientLib: "actioncable", cableUrl: TARGETS.railsActionCable },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-rails-anycable-5k",
+    description: "Avalanche: 5K Rails + AnyCable clients, RPC backend redeploy (should survive)",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-anycable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-any", ...RAILS_EXT, cableUrl: TARGETS.railsAnyCable },
+    baseline: {},
+    driftThresholdPct: 100,
+  },
+  {
+    id: "avalanche-rails-asynccable-5k",
+    description: "Avalanche: 5K Rails + AsyncCable (Falcon) clients, app redeploy",
+    category: "avalanche",
+    endpoint: "bench-avalanche-anycable",
+    mode: "avalanche",
+    redeployServiceName: "rails-asynccable",
+    params: { n: 5000, ramp: 200, prearm: 180, recoveryWait: 300, stream: "avalanche-rails-asc", ...RAILS_BASE, clientLib: "actioncable", cableUrl: TARGETS.railsAsyncCable },
     baseline: {},
     driftThresholdPct: 100,
   },

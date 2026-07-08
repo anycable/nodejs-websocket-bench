@@ -2,11 +2,13 @@ node_modules/
 dist/
 *.log
 
-# Bench result outputs go in backend/results/. The directory is tracked
-# via .gitkeep so scripts can write into it on a fresh clone; the actual
-# result files (CSV/JSON) are ignored.
+# Bench result outputs go in backend/results/. Raw per-run dumps (timestamped
+# CSV/JSON) are ignored, but the curated, published result files that the
+# README and docs cite are kept in the repo.
 backend/results/*
 !backend/results/.gitkeep
+!backend/results/rails-*.json
+!backend/results/socketioxide-*.json
 
 # AnyCable Pro binaries are licensed and MUST NEVER be committed to this
 # public repo. These patterns match the asset names from the private

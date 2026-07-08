@@ -1,0 +1,56 @@
+# Local validation of the three cable-bench modes against the production image.
+# Mirrors the Railway topology so we can shake out config before deploying.
+#
+#   docker compose up --build
+#
+#   Solid Cable:   ws://localhost:3001/cable   broadcast http://localhost:3001/_bench/broadcast
+#   Action Cable:  ws://localhost:3002/cable   broadcast http://localhost:3002/_bench/broadcast
+#   AnyCable:      ws://localhost:8080/cable    broadcast http://localhost:8080/_broadcast (via gateway)
+#                  (rails-anycable runs the gRPC backend; anycable-go is the WS gateway)
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  rails-solidcable:
+    build: .
+    image: cable-bench:local
+    environment:
+      BENCH_MODE: solidcable
+      PORT: "3000"
+    ports: ["3001:3000"]
+
+  rails-actioncable:
+    image: cable-bench:local
+    environment:
+      BENCH_MODE: actioncable
+      PORT: "3000"
+      REDIS_URL: redis://redis:6379/1
+    ports: ["3002:3000"]
+    depends_on: [redis]
+
+  rails-anycable:
+    image: cable-bench:local
+    environment:
+      BENCH_MODE: anycable
+      # IPv4 bind for the local docker bridge (Railway uses [::] over its
+      # IPv6 private network; the entrypoint defaults to that).
+      ANYCABLE_RPC_HOST: 0.0.0.0:50051
+    expose: ["50051"]
+
+  anycable-go:
+    image: anycable/anycable-go:latest
+    environment:
+      ANYCABLE_HOST: "0.0.0.0"
+      ANYCABLE_PORT: "8080"
+      ANYCABLE_RPC_HOST: rails-anycable:50051
+      # Broker preset + memory broker enables reliable streams (the extended
+      # protocol resume that backfills messages missed during a disconnect).
+      ANYCABLE_PRESETS: broker
+      ANYCABLE_BROKER: memory
+      ANYCABLE_BROADCAST_ADAPTER: http
+      # Serve the HTTP broadcast handler on the main port so it's reachable at
+      # :8080/_broadcast (matches the Railway target URL). Default is 8090.
+      ANYCABLE_HTTP_BROADCAST_PORT: "8080"
+    ports: ["8080:8080"]
+    depends_on: [rails-anycable]
